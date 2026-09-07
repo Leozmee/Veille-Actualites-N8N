@@ -39,7 +39,11 @@ const config = {
 
   // Garde-fous de volume
   maxArticlesParSource: 45,   // après filtrage par date
-  maxUneParSource: 8,        // articles détaillés en carte, par journal
+  maxUneParSource: 8,        // articles affichés en carte dans la section du journal
+  // Vivier de l'appariement : indépendant du nombre de cartes. Un article
+  // développé remonte dans « L'essentiel » même s'il n'est pas en carte, donc
+  // restreindre ce vivier appauvrit directement le rapport.
+  maxCandidatsParSource: 18,
   maxEnrichissements: 60,     // nb max de pages téléchargées pour compléter les résumés
   maxArticlesLibres: 90,     // plafond par source libre (France Info, France 24, RFI, Euronews)
 

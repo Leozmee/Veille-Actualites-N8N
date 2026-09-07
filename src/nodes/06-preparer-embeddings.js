@@ -7,9 +7,9 @@ const articles = $input.all().map((i) => i.json);
 const cfg = articles[0].cfg;
 const d = cfg.developpements;
 
-// On n'apparie que les articles qui seront réellement affichés en carte,
-// avec exactement la même règle que le nœud de composition — sinon des blocs
-// sont calculés puis jetés.
+// Vivier de l'appariement. Il est volontairement plus large que le nombre de
+// cartes affichées : un article développé remonte dans « L'essentiel » même
+// s'il ne figure pas en carte dans la section de son journal.
 const parSource = new Map();
 for (const a of articles.filter((x) => x.role !== 'libre')) {
   if (!parSource.has(a.source)) parSource.set(a.source, []);
@@ -18,8 +18,9 @@ for (const a of articles.filter((x) => x.role !== 'libre')) {
 const agenda = [];
 for (const liste of parSource.values()) {
   liste.sort((a, b) => new Date(b.date) - new Date(a.date));
-  let une = liste.filter((a) => a.rubrique === 'une').slice(0, cfg.maxUneParSource);
-  if (une.length === 0) une = liste.slice(0, cfg.maxUneParSource);
+  const n = cfg.maxCandidatsParSource || cfg.maxUneParSource;
+  let une = liste.filter((a) => a.rubrique === 'une').slice(0, n);
+  if (une.length === 0) une = liste.slice(0, n);
   agenda.push(...une);
 }
 const libres = articles.filter((a) => a.role === 'libre');
