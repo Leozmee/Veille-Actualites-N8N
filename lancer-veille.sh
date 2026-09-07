@@ -132,20 +132,30 @@ else
 fi
 
 # ── 5. Retour au repos ────────────────────────────────────────────────────
+# Rien ne doit survivre à l'exécution. Trois pièges rencontrés :
+#   · le « quit » gracieux de Docker Desktop n'aboutit pas toujours — il faut
+#     forcer, sinon ~900 Mo restent en mémoire jusqu'au prochain redémarrage ;
+#   · les greffons « docker-agent » ne meurent pas avec l'application ;
+#   · conditionner l'extinction au fait d'avoir démarré Docker soi-même est un
+#     piège : une exécution qui échoue à l'éteindre le laisse allumé, et toutes
+#     les suivantes le trouvent déjà démarré et ne l'éteignent donc jamais.
+#     On éteint donc dès lors qu'aucun conteneur étranger ne tourne.
 docker compose down >> "$JOURNAL" 2>&1
-if (( DEMARRE_DOCKER )); then
-  osascript -e 'quit app "Docker"' > /dev/null 2>&1
-  # L'extinction est progressive (~1 à 2 min) : on la confirme au lieu de la supposer.
-  for i in {1..40}; do
-    pgrep -f "Docker.app/Contents/MacOS" > /dev/null 2>&1 || break
-    sleep 3
-  done
-  RESTE=$(ps -Ao rss,comm | grep -i "Docker.app/Contents/MacOS" | awk '{s+=$1} END {printf "%.0f", s/1024}')
+
+AUTRES=$(docker ps -q 2>/dev/null | wc -l | tr -d ' ')
+if [[ "${AUTRES:-0}" -gt 0 ]]; then
+  trace "Docker laissé actif — ${AUTRES} conteneur(s) étranger(s) en cours"
+else
+  arreter_docker_de_force
+  pkill -f "cli-plugins/docker-agent" > /dev/null 2>&1
+  sleep 2
+  RESTE=$(ps -Ao rss,comm | grep -i "Docker.app" | awk '{s+=$1} END {printf "%.0f", s/1024}')
   if [[ "${RESTE:-0}" -gt 0 ]]; then
-    trace "Docker s'arrête encore (${RESTE} Mo résiduels)"
+    trace "ATTENTION — ${RESTE} Mo Docker résiduels malgré l'extinction forcée"
   else
     trace "Docker arrêté (0 Mo)"
   fi
 fi
-(( DEMARRE_OLLAMA )) && { pkill -x ollama > /dev/null 2>&1; trace "Ollama arrêté"; }
+
+pkill -x ollama > /dev/null 2>&1 && trace "Ollama arrêté"
 trace "─── terminé ───"
