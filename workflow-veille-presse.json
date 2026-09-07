@@ -1,0 +1,1243 @@
+{
+  "id": "veillePresse0001",
+  "name": "Veille presse — 5 quotidiens → PDF par e-mail",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "daysInterval": 3,
+              "triggerAtHour": 8,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      },
+      "id": "declencheur",
+      "name": "Toutes les 3 jours à 8 h",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -380,
+        0
+      ],
+      "notes": "Intervalle réel de 3 jours, déclenchement à 8 h 00 (Europe/Paris). Le compte repart de la date d’activation."
+    },
+    {
+      "parameters": {},
+      "id": "manuel",
+      "name": "Test manuel",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -380,
+        200
+      ],
+      "notes": "Pour lancer un rapport à la demande."
+    },
+    {
+      "parameters": {
+        "fileSelector": "/data/rapports/.etat.json",
+        "options": {}
+      },
+      "id": "lire-etat",
+      "name": "Lire l’état précédent",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        -160,
+        0
+      ],
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true,
+      "notes": "Date du dernier envoi et liens déjà expédiés. Absent au premier lancement : la fenêtre par défaut s’applique."
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// ─── Configuration de la veille ────────────────────────────────────────────\n// Seul endroit à modifier pour régler la veille au quotidien.\n\n// ─── Reprise de l'état précédent ───────────────────────────────────────────\n// Le rapport précédent a laissé sa date et la liste des liens déjà envoyés\n// dans /data/rapports/.etat.json. On repart de là plutôt que d'une fenêtre\n// fixe : sinon une exécution retardée (Mac éteint) laisse un trou, et une\n// exécution manuelle le même jour produit des doublons.\nlet dernierRun = null;\nlet dejaEnvoyes = [];\n// En mode de stockage « filesystem », la propriété data est VIDE et le contenu\n// vit sur disque : il faut passer par le helper, sinon l'état n'est jamais relu\n// et le rapport repart chaque fois d'une fenêtre fixe.\ntry {\n  const b = $input.first()?.binary?.data;\n  if (b) {\n    let brut = '';\n    try {\n      const buf = await this.helpers.getBinaryDataBuffer(0, 'data');\n      if (buf?.length) brut = buf.toString('utf8');\n    } catch (e) { /* helper indisponible */ }\n    if (!brut && b.data) brut = Buffer.from(b.data, 'base64').toString('utf8');\n    if (brut) {\n      const etat = JSON.parse(brut);\n      if (etat.dernierRun) dernierRun = etat.dernierRun;\n      if (Array.isArray(etat.liens)) dejaEnvoyes = etat.liens;\n    }\n  }\n} catch (e) { /* premier lancement, ou état illisible : fenêtre par défaut */ }\n\nconst config = {\n  // Destinataire du rapport PDF\n  destinataire: 'leogaallus@gmail.com, olivia.gallus@gmail.com',\n  expediteur: 'leogaallus@gmail.com',\n\n  // Fenêtre de collecte : on garde les articles des N derniers jours\n  fenetreJours: 3,          // fenêtre par défaut, au tout premier lancement\n  fenetreMaxJours: 8,       // plafond après une longue absence\n\n  // Garde-fous de volume\n  maxArticlesParSource: 45,   // après filtrage par date\n  maxUneParSource: 8,        // articles détaillés en carte, par journal\n  maxEnrichissements: 60,     // nb max de pages téléchargées pour compléter les résumés\n  maxArticlesLibres: 90,     // plafond par source libre (France Info, France 24, RFI, Euronews)\n\n  // Blocs « Développement » : texte tiré des sources libres, rattaché aux unes\n  developpements: {\n    actif: true,\n    modeleEmbedding: 'bge-m3',\n    ollama: 'http://host.docker.internal:11434',  // Ollama tourne sur le Mac, pas dans Docker\n    seuil: 0.65,              // mesuré : au-dessus de 0,65, aucun rapprochement erroné\n    poidsSemantique: 0.65,    // le reste (0,35) vient du recouvrement des noms propres\n    maxBlocs: 60,             // nb max de blocs « Développement » par rapport\n    paragraphes: 3,           // paragraphes repris par bloc\n    maxCaracteres: 1200,\n  },\n\n  // Détection des sujets couverts par plusieurs journaux (indice de Jaccard sur les titres)\n  seuilSujetCommun: 0.40,\n\n  // Taille maximale du PDF joint. Au-delà, le rapport est régénéré sans images\n  // (Gmail refuse au-delà de 25 Mo ; on garde de la marge pour l'encodage MIME).\n  maxPdfMo: 20,\n\n  // Nombre de chiffres marquants en page de garde\n  maxImages: 80,             // images rapatriées et intégrées en base64\n  maxBrevesParSource: 16,    // brèves affichées par journal (le reste est écarté)\n\n  maxTempsForts: 5,          // sujets majeurs, en grand format\n  maxEssentiel: 22,          // total des sujets mis en tête (temps forts inclus)\n  maxEssentielSansDev: 7,    // parmi eux, combien au maximum sans développement\n  maxChiffresMarquants: 12,\n};\n\n// Fenêtre réelle : depuis le dernier rapport, bornée pour éviter un pavé\n// après une longue absence.\nlet fenetre = config.fenetreJours;\nif (dernierRun) {\n  const ecoule = (Date.now() - new Date(dernierRun).getTime()) / 86400000;\n  if (ecoule > 0.2) fenetre = Math.min(Math.max(ecoule, 0.5), config.fenetreMaxJours);\n}\n\nreturn [{ json: { ...config, fenetreJours: Math.round(fenetre * 100) / 100, dernierRun, dejaEnvoyes } }];\n"
+      },
+      "id": "configuration",
+      "name": "Configuration",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -160,
+        100
+      ],
+      "notes": "Destinataire, fenêtre de collecte, plafonds. Le seul nœud à modifier au quotidien.",
+      "notesInFlow": false
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// ─── Liste des flux RSS à interroger ───────────────────────────────────────\n// Un item de sortie = un flux. Le nœud HTTP suivant s'exécute une fois par item.\n// Flux vérifiés le 07/09/2026 (tous en HTTP 200).\n\n// dejaEnvoyes reste dans le nœud Configuration : recopié sur chaque article,\n// il alourdirait inutilement toute la chaîne.\nconst { dejaEnvoyes, ...cfg } = $input.first().json;\n\nconst flux = [\n  // ─── AGENDA : les 5 quotidiens. Ils définissent ce que la presse traite. ───\n  // Le Monde\n  { source: 'Le Monde',   domaine: 'lemonde.fr',    couleur: '#1a1a1a', rubrique: 'une', libelle: 'À la une',\n    url: 'https://www.lemonde.fr/rss/une.xml' },\n  { source: 'Le Monde',   domaine: 'lemonde.fr',    couleur: '#1a1a1a', rubrique: 'fil', libelle: 'En continu',\n    url: 'https://www.lemonde.fr/rss/en_continu.xml' },\n\n  // Le Figaro\n  { source: 'Le Figaro',  domaine: 'lefigaro.fr',   couleur: '#00539f', rubrique: 'une', libelle: 'Actualités',\n    url: 'https://www.lefigaro.fr/rss/figaro_actualites.xml' },\n  { source: 'Le Figaro',  domaine: 'lefigaro.fr',   couleur: '#00539f', rubrique: 'fil', libelle: 'Flash actu',\n    url: 'https://www.lefigaro.fr/rss/figaro_flash-actu.xml' },\n\n  // Le Parisien  (flux sans date ni résumé : complétés par l'étape d'enrichissement)\n  { source: 'Le Parisien', domaine: 'leparisien.fr', couleur: '#e2001a', rubrique: 'une', libelle: 'À la une',\n    url: 'https://feeds.leparisien.fr/leparisien/rss/une' },\n  { source: 'Le Parisien', domaine: 'leparisien.fr', couleur: '#e2001a', rubrique: 'fil', libelle: 'Fil général',\n    url: 'https://feeds.leparisien.fr/leparisien/rss' },\n\n  // Libération\n  { source: 'Libération', domaine: 'liberation.fr', couleur: '#e10600', rubrique: 'une', libelle: 'Toutes les infos',\n    url: 'https://www.liberation.fr/arc/outboundfeeds/rss-all/?outputType=xml' },\n\n  // La Croix\n  { source: 'La Croix',   domaine: 'la-croix.com',  couleur: '#0069b4', rubrique: 'une', libelle: 'Tous univers',\n    url: 'https://www.la-croix.com/RSS/UNIVERS' },\n  { source: 'La Croix',   domaine: 'la-croix.com',  couleur: '#0069b4', rubrique: 'fil', libelle: 'France',\n    url: 'https://www.la-croix.com/RSS/UNIVERS_WFRA' },\n\n  // ─── PROFONDEUR : sources libres, texte intégral accessible. ──────────────\n  // Elles n'ont pas de section dans le rapport : elles alimentent les blocs\n  // « Développement » rattachés aux articles à la une des quotidiens.\n  { source: 'France Info', domaine: 'franceinfo.fr',  couleur: '#0a3d62', role: 'libre',\n    url: 'https://www.franceinfo.fr/titres.rss' },\n  { source: 'France 24',   domaine: 'france24.com',   couleur: '#0a3d62', role: 'libre',\n    url: 'https://www.france24.com/fr/rss' },\n  { source: 'France 24',   domaine: 'france24.com',   couleur: '#0a3d62', role: 'libre',\n    url: 'https://www.france24.com/fr/france/rss' },\n  { source: 'RFI',         domaine: 'rfi.fr',         couleur: '#0a3d62', role: 'libre',\n    url: 'https://www.rfi.fr/fr/france/rss' },\n  { source: 'RFI',         domaine: 'rfi.fr',         couleur: '#0a3d62', role: 'libre',\n    url: 'https://www.rfi.fr/fr/monde/rss' },\n  { source: 'Euronews',    domaine: 'euronews.com',   couleur: '#0a3d62', role: 'libre',\n    url: 'https://fr.euronews.com/rss?level=theme&name=news' },\n  // Rubriques supplémentaires : plus le vivier est large, plus d'articles des\n  // quotidiens trouvent leur équivalent développé.\n  { source: 'France Info', domaine: 'franceinfo.fr',  couleur: '#0a3d62', role: 'libre',\n    url: 'https://www.franceinfo.fr/politique.rss' },\n  { source: 'France Info', domaine: 'franceinfo.fr',  couleur: '#0a3d62', role: 'libre',\n    url: 'https://www.franceinfo.fr/monde.rss' },\n  { source: 'France Info', domaine: 'franceinfo.fr',  couleur: '#0a3d62', role: 'libre',\n    url: 'https://www.franceinfo.fr/economie.rss' },\n  { source: 'France Info', domaine: 'franceinfo.fr',  couleur: '#0a3d62', role: 'libre',\n    url: 'https://www.franceinfo.fr/societe.rss' },\n  { source: 'France 24',   domaine: 'france24.com',   couleur: '#0a3d62', role: 'libre',\n    url: 'https://www.france24.com/fr/europe/rss' },\n  { source: 'RFI',         domaine: 'rfi.fr',         couleur: '#0a3d62', role: 'libre',\n    url: 'https://www.rfi.fr/fr/economie/rss' },\n];\n\nreturn flux.map((f) => ({ json: { role: 'agenda', rubrique: 'fil', libelle: '', ...f, cfg } }));\n"
+      },
+      "id": "liste-des-flux",
+      "name": "Liste des flux",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        60,
+        100
+      ],
+      "notes": "9 flux RSS officiels. Un item = un flux.",
+      "notesInFlow": false
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            },
+            {
+              "name": "Accept",
+              "value": "application/rss+xml, application/xml;q=0.9, */*;q=0.8"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 45000,
+          "batching": {
+            "batch": {
+              "batchSize": 3,
+              "batchInterval": 700
+            }
+          },
+          "response": {
+            "response": {
+              "responseFormat": "text",
+              "outputPropertyName": "data"
+            }
+          }
+        }
+      },
+      "id": "http-flux",
+      "name": "Récupérer les flux",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        280,
+        100
+      ],
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true,
+      "notes": "Un flux indisponible n’interrompt pas le rapport (continueRegularOutput)."
+    },
+    {
+      "parameters": {
+        "mode": "xmlToJson",
+        "dataPropertyName": "data",
+        "options": {
+          "explicitArray": false,
+          "trim": true,
+          "attrkey": "$",
+          "charkey": "_",
+          "ignoreAttrs": false,
+          "mergeAttrs": false
+        }
+      },
+      "id": "xml",
+      "name": "Parser le XML",
+      "type": "n8n-nodes-base.xml",
+      "typeVersion": 1,
+      "position": [
+        500,
+        100
+      ],
+      "onError": "continueRegularOutput",
+      "notes": "explicitArray=false + trim : format attendu par le nœud suivant."
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// ─── Normalisation des flux RSS ────────────────────────────────────────────\n// Entrée  : sortie du nœud XML (une entrée par flux)\n// Sortie  : un item par article, schéma unifié, dédoublonné et filtré par date.\n\nconst fluxItems = $('Liste des flux').all();\nconst cfg = fluxItems[0].json.cfg;\n\n// ── Utilitaires de lecture XML (xml2js : explicitArray=false, attrkey='$') ──\nconst asArray = (v) => (v == null ? [] : Array.isArray(v) ? v : [v]);\nconst txt = (v) => {\n  if (v == null) return '';\n  if (typeof v === 'string') return v;\n  if (typeof v === 'number') return String(v);\n  if (typeof v === 'object') return txt(v._ ?? v['#text'] ?? '');\n  return '';\n};\n// Les attributs XML se retrouvent soit sous « $ » (attrkey par défaut), soit\n// fusionnés dans l'objet parent selon la configuration du nœud XML. On accepte\n// les deux formes : sans cela, les images de media:content sont perdues.\nconst attr = (v, name) => {\n  if (!v || typeof v !== 'object') return '';\n  if (v.$ && v.$[name] != null) return v.$[name];\n  if (v[name] != null && typeof v[name] !== 'object') return v[name];\n  if (v['@' + name] != null) return v['@' + name];\n  if (v.$$ && v.$$[name] != null) return v.$$[name];\n  return '';\n};\n\n// Retire les balises HTML éventuellement présentes dans les descriptions\nconst deTag = (s) =>\n  String(s)\n    .replace(/<br\\s*\\/?>/gi, ' ')\n    .replace(/<[^>]+>/g, ' ')\n    .replace(/&nbsp;/gi, ' ')\n    .replace(/&amp;/gi, '&')\n    .replace(/&quot;/gi, '\"')\n    .replace(/&#39;|&apos;/gi, '’')\n    .replace(/&lt;/gi, '<')\n    .replace(/&gt;/gi, '>')\n    .replace(/\\s+/g, ' ')\n    .trim();\n\n// ── Identification du journal par le domaine du lien (robuste aux décalages) ─\nconst JOURNAUX = [\n  { test: /(^|\\.)lemonde\\.fr/i,    source: 'Le Monde',    couleur: '#1a1a1a' },\n  { test: /(^|\\.)lefigaro\\.fr/i,   source: 'Le Figaro',   couleur: '#00539f' },\n  { test: /(^|\\.)leparisien\\.fr/i, source: 'Le Parisien', couleur: '#e2001a' },\n  { test: /(^|\\.)liberation\\.fr/i, source: 'Libération',  couleur: '#e10600' },\n  { test: /(^|\\.)la-croix\\.com/i,  source: 'La Croix',    couleur: '#0069b4' },\n  // sources libres (profondeur) — pas de section propre dans le rapport\n  { test: /(^|\\.)(?:france)?tvinfo\\.fr|(^|\\.)franceinfo\\.fr/i, source: 'France Info', couleur: '#0a3d62', role: 'libre' },\n  { test: /(^|\\.)france24\\.com/i,  source: 'France 24',   couleur: '#0a3d62', role: 'libre' },\n  { test: /(^|\\.)rfi\\.fr/i,        source: 'RFI',         couleur: '#0a3d62', role: 'libre' },\n  { test: /(^|\\.)euronews\\.com/i,  source: 'Euronews',    couleur: '#0a3d62', role: 'libre' },\n];\nconst identifier = (lien) => {\n  let host = '';\n  try { host = new URL(lien).hostname; } catch (e) { host = String(lien); }\n  return JOURNAUX.find((j) => j.test.test(host)) || null;\n};\n\n// ── Datation ───────────────────────────────────────────────────────────────\n// 1) <pubDate> / <dc:date>  2) date contenue dans l'URL (Le Parisien n'en a pas d'autre)\nconst dateDepuisUrl = (lien) => {\n  const u = String(lien);\n  let m = u.match(/[-/](\\d{2})-(\\d{2})-(20\\d{2})[-/.]/);          // -07-09-2026-  (Le Parisien)\n  if (m) return new Date(`${m[3]}-${m[2]}-${m[1]}T09:00:00+02:00`);\n  m = u.match(/[-/_](20\\d{2})(\\d{2})(\\d{2})(?:[-_/.]|$)/);        // -20260907     (Figaro, Libé, La Croix)\n  if (m) return new Date(`${m[1]}-${m[2]}-${m[3]}T09:00:00+02:00`);\n  m = u.match(/\\/(20\\d{2})\\/(\\d{2})\\/(\\d{2})\\//);                 // /2026/09/07/  (Le Monde)\n  if (m) return new Date(`${m[1]}-${m[2]}-${m[3]}T09:00:00+02:00`);\n  return null;\n};\nconst lireDate = (it, lien) => {\n  for (const cle of ['pubDate', 'dc:date', 'date', 'published', 'updated']) {\n    const brut = txt(it[cle]);\n    if (brut) {\n      const d = new Date(brut.trim());\n      if (!isNaN(d)) return { date: d, source: 'flux' };\n    }\n  }\n  const d = dateDepuisUrl(lien);\n  return d && !isNaN(d) ? { date: d, source: 'url' } : { date: null, source: 'aucune' };\n};\n\n// ── Image de l'article ─────────────────────────────────────────────────────\nconst urlDe = (v) => {\n  if (!v) return '';\n  if (typeof v === 'string') return /^https?:/i.test(v) ? v : '';\n  return attr(v, 'url');\n};\nconst lireImage = (it) => {\n  for (const cle of ['media:content', 'media:thumbnail', 'image', 'enclosure']) {\n    for (const v of asArray(it[cle])) {\n      if (cle === 'enclosure') {\n        const type = attr(v, 'type');\n        if (type && !/^image\\//i.test(type)) continue;\n      }\n      const u = urlDe(v);\n      if (u) return u;\n    }\n  }\n  // Dernier recours : une image citée dans le contenu enrichi du flux\n  const html = txt(it['content:encoded']) || txt(it.description);\n  const m = String(html).match(/<img[^>]+src=[\"']([^\"']+)[\"']/i);\n  return m ? m[1] : '';\n};\n\n// ── Parcours des flux ──────────────────────────────────────────────────────\nconst maintenant = new Date();\nconst limite = new Date(maintenant.getTime() - cfg.fenetreJours * 86400000);\nconst parUrl = new Map();\nconst diag = [];\n// Articles déjà partis dans un rapport précédent : on ne les reprend pas.\nconst dejaVus = new Set($('Configuration').first().json.dejaEnvoyes || []);\n\n$input.all().forEach((entree, i) => {\n  const meta = fluxItems[Math.min(i, fluxItems.length - 1)].json;\n  const doc = entree.json;\n  const canal = doc?.rss?.channel ?? doc?.channel ?? doc?.feed ?? null;\n  const bruts = asArray(canal?.item ?? canal?.entry ?? []);\n\n  if (!canal || bruts.length === 0) {\n    diag.push({ flux: meta.url, source: meta.source, articles: 0, erreur: doc?.error ? String(doc.error).slice(0, 200) : 'flux vide ou illisible' });\n    return;\n  }\n\n  let retenus = 0;\n  for (const it of bruts) {\n    const lien = (txt(it.link) || txt(it.guid) || attr(asArray(it.link)[0], 'href')).trim();\n    if (!lien || !/^https?:/i.test(lien)) continue;\n\n    const journal = identifier(lien) || { source: meta.source, couleur: meta.couleur };\n    const titre = deTag(txt(it.title));\n    if (!titre) continue;\n\n    const { date, source: origineDate } = lireDate(it, lien);\n    // Sans date exploitable on ne peut pas garantir la fraîcheur : on écarte.\n    if (!date) continue;\n    if (date < limite || date > new Date(maintenant.getTime() + 86400000)) continue;\n\n    const cle = lien.split('?')[0].replace(/\\/$/, '');\n    if (dejaVus.has(cle)) continue;\n    const existant = parUrl.get(cle);\n    const article = {\n      titre,\n      lien,\n      resume: deTag(txt(it.description) || txt(it['content:encoded']) || txt(it.summary)),\n      date: date.toISOString(),\n      dateOrigine: origineDate,\n      source: journal.source,\n      couleur: journal.couleur,\n      role: journal.role || meta.role || 'agenda',\n      rubrique: (journal.role || meta.role) === 'libre' ? 'libre' : meta.rubrique,\n      fluxLibelle: meta.libelle,\n      categorie: deTag(asArray(it.category).map(txt).filter(Boolean).join(' · ')),\n      auteur: deTag(txt(it['dc:creator'])),\n      image: lireImage(it),\n    };\n\n    // Un article vu dans « une » et dans « fil » reste en « une »\n    if (existant) {\n      if (existant.rubrique === 'fil' && article.rubrique === 'une') parUrl.set(cle, { ...existant, rubrique: 'une', fluxLibelle: article.fluxLibelle });\n      if (!existant.resume && article.resume) parUrl.get(cle).resume = article.resume;\n      if (!existant.image && article.image) parUrl.get(cle).image = article.image;\n      continue;\n    }\n    parUrl.set(cle, article);\n    retenus++;\n  }\n  diag.push({ flux: meta.url, source: meta.source, rubrique: meta.rubrique, recus: bruts.length, retenus });\n});\n\n// ── Plafond par journal, les plus récents d'abord ──────────────────────────\nconst tous = [...parUrl.values()].sort((a, b) => new Date(b.date) - new Date(a.date));\nconst compte = {};\nconst retenus = [];\nfor (const a of tous) {\n  compte[a.source] = (compte[a.source] || 0) + 1;\n  const plafond = a.role === 'libre' ? cfg.maxArticlesLibres : cfg.maxArticlesParSource;\n  if (compte[a.source] <= plafond) retenus.push(a);\n}\n\nif (retenus.filter((a) => a.role !== 'libre').length === 0) {\n  throw new Error('Aucun article collecté sur la fenêtre demandée. Diagnostic : ' + JSON.stringify(diag));\n}\n\nreturn retenus.map((a, idx) => ({\n  json: {\n    ...a,\n    id: idx,\n    besoinEnrichissement: a.role !== 'libre' && (!a.resume || a.resume.length < 40),\n    cfg,\n    diag: idx === 0 ? diag : undefined,\n  },\n}));\n"
+      },
+      "id": "normaliser-les-articles",
+      "name": "Normaliser les articles",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        100
+      ],
+      "notes": "Schéma unifié, journal déduit du domaine, date (flux ou URL), dédoublonnage, fenêtre de 3 jours.",
+      "notesInFlow": false
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// ─── Sélection des articles à compléter ────────────────────────────────────\n// Certains flux (Le Parisien) ne renvoient que titre + lien.\n// On prépare ici la liste des pages à consulter pour récupérer les balises <meta>.\n// Aucune page n'est téléchargée si tous les flux sont déjà complets : on émet\n// alors un item sentinelle pour que la branche reste active dans n8n.\n\nconst articles = $input.all().map((i) => i.json);\nconst cfg = articles[0].cfg;\n\nconst aCompleter = articles\n  .filter((a) => a.besoinEnrichissement)\n  .slice(0, cfg.maxEnrichissements);\n\nif (aCompleter.length === 0) {\n  return [{ json: { lien: articles[0].lien, sentinelle: true } }];\n}\n\nreturn aCompleter.map((a) => ({ json: { lien: a.lien, sentinelle: false } }));\n"
+      },
+      "id": "pr-parer-enrichissement",
+      "name": "Préparer enrichissement",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        940,
+        100
+      ],
+      "notes": "Le Parisien ne renvoie que titre + lien : on liste les pages dont il faut lire les balises <meta>.",
+      "notesInFlow": false
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.lien }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            },
+            {
+              "name": "Accept",
+              "value": "text/html,application/xhtml+xml"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 45000,
+          "batching": {
+            "batch": {
+              "batchSize": 3,
+              "batchInterval": 1100
+            }
+          },
+          "response": {
+            "response": {
+              "responseFormat": "text",
+              "outputPropertyName": "data"
+            }
+          }
+        }
+      },
+      "id": "http-pages",
+      "name": "Récupérer les pages",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1160,
+        100
+      ],
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true,
+      "notes": "Lecture des balises <meta> publiques uniquement (og:description, og:image, date). Requêtes étalées."
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// ─── Fusion des métadonnées récupérées sur les pages ───────────────────────\n// Entrée : HTML brut des pages (aligné sur « Préparer enrichissement »).\n// On extrait og:description / article:published_time / og:image, puis on\n// refusionne avec la liste complète d'articles issue de la normalisation.\n\nconst articles = $('Normaliser les articles').all().map((i) => ({ ...i.json }));\nconst cibles = $('Préparer enrichissement').all().map((i) => i.json);\nconst pages = $input.all();\nconst cfg = articles[0].cfg;\n\nconst meta = (html, cles) => {\n  for (const cle of cles) {\n    const re = new RegExp(\n      '<meta[^>]*(?:property|name)\\\\s*=\\\\s*[\"\\']' + cle + '[\"\\'][^>]*>',\n      'i'\n    );\n    const balise = html.match(re);\n    if (!balise) continue;\n    const val = balise[0].match(/content\\s*=\\s*[\"']([^\"']*)[\"']/i);\n    if (val && val[1].trim()) return val[1].trim();\n  }\n  return '';\n};\nconst decode = (s) =>\n  String(s)\n    .replace(/&amp;/gi, '&').replace(/&quot;/gi, '\"').replace(/&#0?39;|&apos;/gi, '’')\n    .replace(/&lt;/gi, '<').replace(/&gt;/gi, '>').replace(/&nbsp;/gi, ' ')\n    .replace(/&#(\\d+);/g, (_, n) => String.fromCharCode(+n))\n    .replace(/\\s+/g, ' ').trim();\n\n// Les URL de redimensionnement du Parisien sont signées : impossible d'y changer\n// la taille après coup. On cherche donc dans la page la plus petite variante déjà\n// signée pour la même image (≥ 600 px), sans quoi le PDF gonfle de plusieurs Mo\n// par article. La carte ne fait que 42 mm, soit ~500 px à l'impression.\nconst imageLegere = (html, defaut) => {\n  if (!defaut || !/leparisien\\.fr\\/resizer/.test(defaut)) return defaut;\n  const fichier = defaut.split('/').pop().split('?')[0];\n  if (!fichier) return defaut;\n  const candidats = [];\n  for (const m of html.matchAll(/https:\\/\\/www\\.leparisien\\.fr\\/resizer\\/[^\"'\\s\\\\]+/g)) {\n    const u = m[0];\n    if (u.split('/').pop().split('?')[0] !== fichier) continue;\n    const t = u.match(/\\/(\\d+)x(\\d+)\\//);\n    if (t && +t[1] >= 600) candidats.push({ url: u, largeur: +t[1] });\n  }\n  if (!candidats.length) return defaut;\n  candidats.sort((a, b) => a.largeur - b.largeur);\n  return candidats[0].url;\n};\n\n// Indexation des métadonnées par URL\nconst parLien = new Map();\npages.forEach((p, i) => {\n  const cible = cibles[Math.min(i, cibles.length - 1)];\n  if (!cible || cible.sentinelle) return;\n  const html = typeof p.json.data === 'string' ? p.json.data : (p.json.body || '');\n  if (!html || html.length < 200) return;\n  parLien.set(cible.lien, {\n    resume: decode(meta(html, ['og:description', 'description', 'twitter:description'])),\n    image: imageLegere(html, meta(html, ['og:image', 'twitter:image'])),\n    datePubliee: meta(html, ['article:published_time', 'datePublished', 'article:modified_time']),\n  });\n});\n\n// Application + re-filtrage sur la fenêtre (une date exacte peut maintenant être connue)\nconst maintenant = new Date();\nconst limite = new Date(maintenant.getTime() - cfg.fenetreJours * 86400000);\n\nconst enrichis = articles.map((a) => {\n  const m = parLien.get(a.lien);\n  if (!m) return a;\n  if (!a.resume && m.resume) { a.resume = m.resume; }\n  if (!a.image && m.image) a.image = m.image;\n  if (m.datePubliee) {\n    const d = new Date(m.datePubliee);\n    if (!isNaN(d)) { a.date = d.toISOString(); a.dateOrigine = 'page'; }\n  }\n  return a;\n});\n\nconst retenus = enrichis\n  .filter((a) => {\n    const d = new Date(a.date);\n    return d >= limite && d <= new Date(maintenant.getTime() + 86400000);\n  })\n  .sort((a, b) => new Date(b.date) - new Date(a.date));\n\nif (retenus.length === 0) throw new Error('Aucun article dans la fenêtre après enrichissement.');\n\nreturn retenus.map((a) => ({ json: a }));\n"
+      },
+      "id": "fusionner-les-m-tadonn-es",
+      "name": "Fusionner les métadonnées",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1380,
+        100
+      ],
+      "notes": "Complète résumé / image / date, puis re-filtre sur la fenêtre.",
+      "notesInFlow": false
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// ─── Préparation de l'appel d'embeddings (Ollama) ──────────────────────────\n// Un seul appel encode tous les titres à comparer : ceux des unes des\n// quotidiens, puis ceux des sources libres. L'ordre est conservé pour que\n// le nœud d'appariement retrouve qui est qui.\n\nconst articles = $input.all().map((i) => i.json);\nconst cfg = articles[0].cfg;\nconst d = cfg.developpements;\n\n// On n'apparie que les articles qui seront réellement affichés en carte,\n// avec exactement la même règle que le nœud de composition — sinon des blocs\n// sont calculés puis jetés.\nconst parSource = new Map();\nfor (const a of articles.filter((x) => x.role !== 'libre')) {\n  if (!parSource.has(a.source)) parSource.set(a.source, []);\n  parSource.get(a.source).push(a);\n}\nconst agenda = [];\nfor (const liste of parSource.values()) {\n  liste.sort((a, b) => new Date(b.date) - new Date(a.date));\n  let une = liste.filter((a) => a.rubrique === 'une').slice(0, cfg.maxUneParSource);\n  if (une.length === 0) une = liste.slice(0, cfg.maxUneParSource);\n  agenda.push(...une);\n}\nconst libres = articles.filter((a) => a.role === 'libre');\n\n// Rien à faire : on émet un item inerte pour que la branche reste vivante.\nif (!d.actif || agenda.length === 0 || libres.length === 0) {\n  return [{ json: { ignorer: true, url: `${d.ollama}/api/embed`, model: d.modeleEmbedding, input: ['-'] } }];\n}\n\nreturn [{\n  json: {\n    ignorer: false,\n    url: `${d.ollama}/api/embed`,\n    model: d.modeleEmbedding,\n    input: [...agenda.map((a) => a.titre), ...libres.map((a) => a.titre)],\n    nAgenda: agenda.length,\n    nLibres: libres.length,\n    liensAgenda: agenda.map((a) => a.lien),\n    liensLibres: libres.map((a) => a.lien),\n  },\n}];\n"
+      },
+      "id": "pr-parer-les-embeddings",
+      "name": "Préparer les embeddings",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1600,
+        100
+      ],
+      "notes": "Rassemble en un seul appel les titres des unes et ceux des sources libres.",
+      "notesInFlow": false
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.url }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: $json.model, input: $json.input }) }}",
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "id": "ollama-embed",
+      "name": "Encoder les titres (Ollama)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1820,
+        100
+      ],
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true,
+      "notes": "Ollama tourne nativement sur le Mac (GPU Metal). S’il est arrêté, le rapport est simplement produit sans développements."
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// ─── Appariement quotidiens ↔ sources libres ───────────────────────────────\n// Score hybride : proximité sémantique (bge-m3) + recouvrement des noms\n// propres et des chiffres du titre. Le second terme est décisif : « Saxe-Anhalt »,\n// « Merz », « Colombie » distinguent deux sujets là où le sémantique seul,\n// qui tasse tous les scores entre 0,68 et 0,79, ne sépare rien.\n\nconst tous = $('Fusionner les métadonnées').all().map((i) => ({ ...i.json }));\nconst prep = $('Préparer les embeddings').first().json;\nconst cfg = tous[0].cfg;\nconst d = cfg.developpements;\n\nconst agenda = tous.filter((a) => a.role !== 'libre');\nconst rendre = () => agenda.map((a) => ({ json: a }));\n\n// Ollama injoignable, désactivé, ou réponse inexploitable → rapport sans développements\nconst rep = $input.first()?.json;\nconst vecteurs = rep?.embeddings;\nif (prep.ignorer || !Array.isArray(vecteurs) || vecteurs.length !== prep.nAgenda + prep.nLibres) {\n  return rendre();\n}\n\nconst normer = (v) => { const n = Math.hypot(...v) || 1; return v.map((x) => x / n); };\nconst vAgenda = vecteurs.slice(0, prep.nAgenda).map(normer);\nconst vLibres = vecteurs.slice(prep.nAgenda).map(normer);\nconst cos = (a, b) => a.reduce((s, x, i) => s + x * b[i], 0);\n\n// Noms propres et nombres du titre\nconst STOP = new Set(['Le','La','Les','Un','Une','Des','Du','Ce','Cette','Il','Elle','En','Au','Aux','Pour','Dans','Sur','Avec','Après','Avant','Comment','Pourquoi','Que','Qui','Quoi','Direct','Info','Vidéo','On','Nos','Ses','Son','Leur','Mais','Et','Ou','Plus','Tout','Tous','Ils','Elles','Selon','Face','Entre','Chez','Sans','Vers','Depuis','Quand']);\nconst entites = (t) => new Set(\n  (String(t).match(/(?:[A-ZÀ-Ý][\\wÀ-ÿ'’-]{2,})|(?:\\d[\\d  ,.]*\\d|\\d+)/g) || [])\n    .map((m) => m.replace(/[’']s?$/, ''))\n    .filter((m) => !STOP.has(m))\n    // Une année nue n'identifie pas un sujet : « CAN 2027 » et « haute couture\n    // 2026/2027 » ne parlent pas de la même chose.\n    .filter((m) => !/^(?:19|20)\\d{2}$/.test(m))\n    .map((m) => m.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, ''))\n);\nconst recouvre = (a, b) => {\n  if (!a.size || !b.size) return 0;\n  let i = 0; for (const x of a) if (b.has(x)) i++;\n  return i / Math.min(a.size, b.size);\n};\n\n// Grilles de programmes et rendez-vous d'antenne : ce ne sont pas des articles.\nconst EMISSION = /^(?:le\\s+)?(?:journal|jt\\b|revue de presse|le supplément|l['’]invité|édition|magazine|chronique|podcast|émission|en images|en direct de|le club|débat du|les titres|à la une de)/i;\nconst DATE_TITRE = /\\bdu\\s+\\d{1,2}(?:er)?\\s+\\w+\\s+20\\d{2}\\s*$/i;\nconst estEmission = (t) => EMISSION.test(String(t).trim()) || DATE_TITRE.test(String(t).trim());\n\nconst parLien = new Map(tous.map((a) => [a.lien, a]));\nconst cibles = prep.liensAgenda.map((l) => parLien.get(l)).filter(Boolean);\nconst sources = prep.liensLibres.map((l) => parLien.get(l)).filter(Boolean);\nif (cibles.length !== prep.nAgenda || sources.length !== prep.nLibres) return rendre();\nconst utilisable = sources.map((a) => !estEmission(a.titre));\n\nconst eCibles = cibles.map((a) => entites(a.titre));\nconst eSources = sources.map((a) => entites(a.titre));\n\nconst appariements = cibles.map((a, i) => {\n  let best = -1, k = -1;\n  for (let j = 0; j < sources.length; j++) {\n    if (!utilisable[j]) continue;\n    const score = d.poidsSemantique * cos(vAgenda[i], vLibres[j])\n                + (1 - d.poidsSemantique) * recouvre(eCibles[i], eSources[j]);\n    if (score > best) { best = score; k = j; }\n  }\n  return { article: a, source: sources[k], score: best };\n});\n\n// Un même article libre ne sert qu'une fois, au meilleur candidat\nconst pris = new Set();\nlet poses = 0;\nfor (const m of appariements.sort((x, y) => y.score - x.score)) {\n  if (poses >= d.maxBlocs || m.score < d.seuil || pris.has(m.source.lien)) continue;\n  pris.add(m.source.lien);\n  m.article.developpement = {\n    lien: m.source.lien,\n    titre: m.source.titre,\n    source: m.source.source,\n    date: m.source.date,\n    score: Math.round(m.score * 100) / 100,\n    paragraphes: [],\n  };\n  poses++;\n}\n\nreturn agenda.map((a) => ({ json: a }));\n"
+      },
+      "id": "apparier-les-sujets",
+      "name": "Apparier les sujets",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2040,
+        100
+      ],
+      "notes": "Score hybride : 0,65 × proximité sémantique + 0,35 × recouvrement des noms propres.",
+      "notesInFlow": false
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// ─── Pages des sources libres à télécharger ────────────────────────────────\n// Uniquement celles retenues par l'appariement. Item sentinelle si aucune,\n// pour que la branche reste vivante dans n8n.\n\nconst articles = $input.all().map((i) => i.json);\nconst aLire = articles.filter((a) => a.developpement?.lien);\n\nif (aLire.length === 0) {\n  return [{ json: { lien: articles[0].lien, sentinelle: true } }];\n}\nreturn aLire.map((a) => ({ json: { lien: a.developpement.lien, sentinelle: false } }));\n"
+      },
+      "id": "pr-parer-extraction-du-corps",
+      "name": "Préparer extraction du corps",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2260,
+        100
+      ],
+      "notes": "Ne liste que les pages des sources libres effectivement retenues.",
+      "notesInFlow": false
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.lien }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            },
+            {
+              "name": "Accept",
+              "value": "text/html,application/xhtml+xml"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 45000,
+          "batching": {
+            "batch": {
+              "batchSize": 3,
+              "batchInterval": 1100
+            }
+          },
+          "response": {
+            "response": {
+              "responseFormat": "text",
+              "outputPropertyName": "data"
+            }
+          }
+        }
+      },
+      "id": "http-libres",
+      "name": "Récupérer les articles libres",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2480,
+        100
+      ],
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true,
+      "notes": "France Info, France 24, RFI, Euronews : accès libre, texte intégral."
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// ─── Extraction du corps des articles libres ───────────────────────────────\n// Deux voies : les paragraphes de la zone <article>/<main>, sinon le champ\n// articleBody du JSON-LD. Les blocs de navigation et d'abonnement sont écartés.\n\nconst articles = $('Apparier les sujets').all().map((i) => ({ ...i.json }));\nconst cibles = $('Préparer extraction du corps').all().map((i) => i.json);\nconst pages = $input.all();\nconst d = articles[0].cfg.developpements;\n\nconst deTag = (s) => String(s)\n  .replace(/<(script|style)[\\s\\S]*?<\\/\\1>/gi, ' ')\n  .replace(/<br\\s*\\/?>/gi, ' ')\n  .replace(/<[^>]+>/g, ' ')\n  .replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&').replace(/&quot;/gi, '\"')\n  .replace(/&#0?39;|&apos;/gi, '’').replace(/&lt;/gi, '<').replace(/&gt;/gi, '>')\n  .replace(/&#(\\d+);/g, (_, n) => String.fromCharCode(+n))\n  .replace(/\\s+/g, ' ').trim();\n\n// Habillage éditorial à ne pas confondre avec du texte d'article\nconst REBUT = /^(?:s['’]abonner|abonnez|newsletter|partager|publicit|cet article|lire aussi|à lire|voir aussi|suivez|retrouvez tous|tous droits|© |commentaire|inscrivez|connectez|déjà abonné|profitez de|sans engagement|découvrez|recevez|en cliquant|vos préférences|cookies?\\b|pour sauvegarder|pour profiter|vous devez être|votre compte|identifiez-vous|créez un compte|ce contenu est|activez javascript|veuillez activer)/i;\n// Messages d'interface glissés au milieu du texte : lecteur vidéo bloqué,\n// navigateur non pris en charge, invitation à accepter les traceurs…\nconst TECHNIQUE = /(?:extension de votre navigateur|lecteur (?:vid[ée]o|audio)|bloque[rz]? le chargement|regarder ce contenu|d[ée]sactiver ou la d[ée]sinstaller|votre navigateur (?:n[e’']|ne )|n[e’']est pas (?:pris en charge|compatible)|veuillez (?:accepter|activer|autoriser)|activer le javascript|acceptez les cookies|pour lire cette vid[ée]o|contenu (?:non )?disponible)/i;\nconst estRebut = (t) => REBUT.test(t)\n  || TECHNIQUE.test(t)\n  || (/\\b(abonn|newsletter|cookies?|connect[ée]|inscription|javascript)\\b/i.test(t) && t.length < 260);\n\nconst viaJsonLd = (html) => {\n  let best = '';\n  for (const m of html.matchAll(/<script[^>]*type=[\"']application\\/ld\\+json[\"'][^>]*>([\\s\\S]*?)<\\/script>/gi)) {\n    try {\n      const walk = (o) => {\n        if (!o || typeof o !== 'object') return;\n        if (typeof o.articleBody === 'string' && o.articleBody.length > best.length) best = o.articleBody;\n        for (const v of Object.values(o)) Array.isArray(v) ? v.forEach(walk) : walk(v);\n      };\n      walk(JSON.parse(m[1].trim()));\n    } catch (e) { /* bloc JSON-LD invalide : on passe */ }\n  }\n  return deTag(best);\n};\n\nconst viaParagraphes = (html) => {\n  const zones = [...html.matchAll(/<(article|main)\\b[^>]*>([\\s\\S]*?)<\\/\\1>/gi)].map((m) => m[2]);\n  const src = zones.length ? zones.sort((a, b) => b.length - a.length)[0] : html;\n  const vus = new Set(); const ps = [];\n  for (const m of src.matchAll(/<p\\b[^>]*>([\\s\\S]*?)<\\/p>/gi)) {\n    const t = deTag(m[1]);\n    if (t.length < 80 || estRebut(t)) continue;\n    if (!/[.!?…»]$/.test(t) && t.length < 140) continue;   // fragment d'interface\n    const k = t.slice(0, 60);\n    if (vus.has(k)) continue;\n    vus.add(k); ps.push(t);\n  }\n  return ps;\n};\n\nconst corps = (html) => {\n  let ps = viaParagraphes(html);\n  if (ps.length < 2) {\n    const ld = viaJsonLd(html);\n    if (ld) ps = ld.split(/(?<=[.!?…»])\\s+(?=[A-ZÀ-Ý«\"])/).reduce((a, p) => {\n      if (!a.length || a[a.length - 1].length > 220) a.push(p); else a[a.length - 1] += ' ' + p;\n      return a;\n    }, []);\n  }\n  const out = []; let n = 0;\n  for (const p of ps) {\n    if (out.length >= d.paragraphes || n + p.length > d.maxCaracteres) break;\n    out.push(p); n += p.length;\n  }\n  return out;\n};\n\nconst parLien = new Map();\npages.forEach((p, i) => {\n  const cible = cibles[Math.min(i, cibles.length - 1)];\n  if (!cible || cible.sentinelle) return;\n  const html = typeof p.json.data === 'string' ? p.json.data : (p.json.body || '');\n  if (!html || html.length < 500) return;\n  const ps = corps(html);\n  if (ps.length) parLien.set(cible.lien, ps);\n});\n\n// Un développement sans texte exploitable est retiré : mieux vaut rien qu'un bloc vide.\nfor (const a of articles) {\n  if (!a.developpement) continue;\n  const ps = parLien.get(a.developpement.lien);\n  if (ps && ps.length) a.developpement.paragraphes = ps;\n  else delete a.developpement;\n}\n\nreturn articles.map((a) => ({ json: a }));\n"
+      },
+      "id": "extraire-le-corps",
+      "name": "Extraire le corps",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2700,
+        100
+      ],
+      "notes": "Paragraphes de l’article source, habillage éditorial écarté. Un développement sans texte est supprimé.",
+      "notesInFlow": false
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// ─── Extraction et mise en valeur des données chiffrées ────────────────────\n// Repère dans chaque titre/résumé : pourcentages, montants, volumes, périodes.\n// Produit le texte balisé en <mark> + la liste structurée des chiffres.\n\nconst ESP = '[ \\\\t\\\\u00a0\\\\u202f\\\\u2009\\\\u2007]';\nconst NUM = `\\\\d{1,3}(?:${ESP}\\\\d{3})+(?:[.,]\\\\d+)?|\\\\d+(?:[.,]\\\\d+)?`;\nconst SIGNE = `[+\\\\-−–]?${ESP}*`;\nconst DEVISE = `€|\\\\$|£|¥`;\nconst MONNAIE_MOT = `euros?|dollars?|livres?${ESP}+sterling|francs?|yens?|centimes?`;\nconst ECHELLE = `milliards?|millions?|milliers`;\nconst UNITES = [\n  'km/h','km²','km2','m²','m2','km','kg','tonnes?','litres?','hectares?','ha',\n  'TWh','GWh','MWh','kWh','MW','GW','°C',\n  'ans?','années?','mois','semaines?','jours?','heures?','minutes?','secondes?',\n  'habitants?','personnes?','morts?','décès','blessés?','victimes?','migrants?','réfugiés?',\n  'emplois?','postes?','salariés?','fonctionnaires?','chômeurs?','agents?',\n  'logements?','places?','lits?','classes?','élèves?','étudiants?','enseignants?',\n  'sièges?','voix','électeurs?','candidats?','députés?','sénateurs?',\n  'points?','patients?','cas','entreprises?','communes?','départements?','pays','villes?',\n].join('|');\n\n// Alternation ordonnée : les motifs les plus spécifiques d'abord.\nconst MOTIFS = [\n  `\\\\b(?:19|20)\\\\d{2}${ESP}*[-–—]${ESP}*(?:19|20)\\\\d{2}\\\\b`,                                   // 2023-2026\n  `\\\\bde${ESP}+(?:19|20)\\\\d{2}${ESP}+à${ESP}+(?:19|20)\\\\d{2}\\\\b`,                              // de 2020 à 2026\n  `${SIGNE}(?:${NUM})${ESP}*(?:${ECHELLE})(?:${ESP}*d(?:e|['’])${ESP}*)?(?:${MONNAIE_MOT}|${DEVISE})`, // 92 millions de dollars\n  `${SIGNE}(?:${NUM})${ESP}*(?:${DEVISE})`,                                                     // 450 €\n  `(?:${DEVISE})${ESP}*(?:${NUM})`,                                                             // $450\n  `${SIGNE}(?:${NUM})${ESP}*(?:${MONNAIE_MOT})`,                                                // 3 000 euros\n  `${SIGNE}(?:${NUM})${ESP}*(?:%|pour${ESP}?cent|points?${ESP}+de${ESP}+(?:pourcentage|base))`, // +11 %\n  `${SIGNE}(?:${NUM})${ESP}*(?:${ECHELLE})`,                                                    // 2,5 millions\n  `(?:${NUM})${ESP}*(?:${UNITES})`,                                                             // 12 000 logements\n  `\\\\d{1,3}(?:${ESP}\\\\d{3})+`,                                                                  // 45 000\n  `\\\\b\\\\d{4,}\\\\b`,                                                                              // 12500\n].join('|');\n\nconst RE = new RegExp(`(?<![\\\\p{L}\\\\d.,])(?:${MOTIFS})(?![\\\\p{L}])`, 'giu');\n\nconst echapper = (s) =>\n  String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\"/g, '&quot;');\n\nconst valeurNumerique = (t) => {\n  const m = t.match(/\\d{1,3}(?:[     ]\\d{3})+(?:[.,]\\d+)?|\\d+(?:[.,]\\d+)?/);\n  if (!m) return null;\n  let v = parseFloat(m[0].replace(/[     ]/g, '').replace(',', '.'));\n  if (isNaN(v)) return null;\n  if (/milliards?/i.test(t)) v *= 1e9;\n  else if (/millions?/i.test(t)) v *= 1e6;\n  else if (/milliers/i.test(t)) v *= 1e3;\n  if (/^[\\s]*[-−–]/.test(t)) v = -v;\n  return v;\n};\n\nconst classer = (t) => {\n  if (/^\\s*(?:de\\s+)?(?:19|20)\\d{2}\\s*(?:[-–—]|à)\\s*(?:19|20)\\d{2}\\s*$/i.test(t)) return 'periode';\n  if (/%|pour\\s?cent|points?\\s+de\\s+(?:pourcentage|base)/i.test(t)) return 'pourcentage';\n  if (/[€$£¥]|euro|dollar|livre|franc|yen|centime/i.test(t)) return 'montant';\n  return 'volume';\n};\n\n// Une année isolée (2026) n'est pas une donnée chiffrée : on ne la surligne pas.\nconst estAnneeSeule = (t) => /^\\s*\\d{4}\\s*$/.test(t) && +t.trim() >= 1900 && +t.trim() <= 2099;\n\nconst POIDS = { montant: 50, pourcentage: 42, volume: 30, periode: 8 };\n\nfunction surligner(texte) {\n  const trouves = [];\n  if (!texte) return { html: '', chiffres: [] };\n  const brutEchappe = echapper(texte);\n  const html = brutEchappe.replace(RE, (brut, position) => {\n    if (estAnneeSeule(brut)) return brut;\n    // « à 19 heures », « dès 8 h » : c'est un horaire, pas une donnée chiffrée\n    if (new RegExp(`^\\\\s*\\\\d{1,2}${ESP}*(?:h|heures?)\\\\s*$`, 'i').test(brut) &&\n        /(?:à|vers|dès|avant|après|jusqu[’']à|depuis)\\s*$/i.test(brutEchappe.slice(Math.max(0, position - 12), position))) return brut;\n    const type = classer(brut);\n    const valeur = valeurNumerique(brut);\n    if (type === 'volume' && valeur !== null && Math.abs(valeur) < 10 && !/[a-zà-ÿ]/i.test(brut)) return brut;\n    const affiche = brut.trim();\n    const score = POIDS[type] + (valeur ? Math.max(0, Math.log10(Math.abs(valeur) + 1)) * 5 : 0);\n    trouves.push({ texte: affiche, type, valeur, score: Math.round(score * 10) / 10 });\n    return `<mark class=\"chiffre chiffre--${type}\">${brut}</mark>`;\n  });\n  return { html, chiffres: trouves };\n}\n\n// ── Application à chaque article ───────────────────────────────────────────\nreturn $input.all().map((item) => {\n  const a = item.json;\n  const t = surligner(a.titre);\n  const r = surligner(a.resume);\n\n  // Les paragraphes repris d'une source libre sont surlignés eux aussi\n  let dev = null;\n  const chiffresDev = [];\n  if (a.developpement?.paragraphes?.length) {\n    const rendus = a.developpement.paragraphes.map(surligner);\n    rendus.forEach((x) => chiffresDev.push(...x.chiffres));\n    dev = { ...a.developpement, paragraphesHtml: rendus.map((x) => x.html) };\n  }\n\n  // Dédoublonnage des chiffres d'un même article, tri par intérêt décroissant\n  const vus = new Set();\n  const chiffres = [...t.chiffres, ...r.chiffres, ...chiffresDev]\n    .filter((c) => {\n      const k = c.texte.toLowerCase().replace(/\\s+/g, ' ');\n      if (vus.has(k)) return false;\n      vus.add(k);\n      return true;\n    })\n    .sort((x, y) => y.score - x.score);\n\n  return {\n    json: {\n      ...a,\n      titreHtml: t.html,\n      resumeHtml: r.html,\n      developpement: dev,\n      chiffres,\n      nbChiffres: chiffres.length,\n      scoreChiffres: chiffres.reduce((s, c) => s + c.score, 0),\n    },\n  };\n});\n"
+      },
+      "id": "extraire-et-surligner-les-chiffres",
+      "name": "Extraire et surligner les chiffres",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1600,
+        100
+      ],
+      "notes": "Pourcentages, montants, volumes, périodes → balises <mark> + liste structurée.",
+      "notesInFlow": false
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// ─── Images à télécharger ──────────────────────────────────────────────────\n// Les intégrer en base64 dans le HTML rend l'impression déterministe : plus de\n// requête réseau au moment du rendu, donc plus d'image manquante au hasard\n// d'un délai ou d'une protection anti-hotlink.\n\nconst articles = $input.all().map((i) => i.json);\nconst cfg = articles[0].cfg;\n\n// Même réduction qu'à l'affichage : inutile de rapatrier du 3000×2000.\nconst reduireImage = (url) => {\n  if (!url) return '';\n  const u = String(url);\n  if (/img\\.lemde\\.fr/.test(u))   return u.replace(/\\/\\d{3,4}\\/\\d{3,4}\\/(\\d{1,3})\\/(\\d)\\//, '/644/322/$1/$2/');\n  if (/i\\.f1g\\.fr/.test(u))       return u.replace(/\\/media\\/cms\\/[^/]+\\//, '/media/cms/704x396_crop/');\n  if (/i\\.la-croix\\.com/.test(u)) return u.replace(/^(https?:\\/\\/i\\.la-croix\\.com)\\/[^/]+\\//, '$1/620x412/');\n  return u;\n};\n\nconst vues = new Set();\nconst liste = [];\nfor (const a of articles) {\n  if (!a.image) continue;\n  const u = reduireImage(a.image);\n  if (!/^https?:\\/\\//i.test(u) || vues.has(u)) continue;\n  vues.add(u);\n  liste.push({ url: u, origine: a.image });\n  if (liste.length >= cfg.maxImages) break;\n}\n\nif (liste.length === 0) return [{ json: { url: '', sentinelle: true } }];\nreturn liste.map((x) => ({ json: { ...x, sentinelle: false } }));\n"
+      },
+      "id": "pr-parer-les-images",
+      "name": "Préparer les images",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3140,
+        100
+      ],
+      "notes": "Liste les visuels à rapatrier, en version réduite.",
+      "notesInFlow": false
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            },
+            {
+              "name": "Accept",
+              "value": "image/avif,image/webp,image/jpeg,image/png,*/*"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000,
+          "batching": {
+            "batch": {
+              "batchSize": 6,
+              "batchInterval": 300
+            }
+          },
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "data"
+            }
+          }
+        }
+      },
+      "id": "http-images",
+      "name": "Récupérer les images",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3360,
+        100
+      ],
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true,
+      "notes": "Les visuels sont intégrés au HTML : Gotenberg n’a plus aucune requête réseau à faire au moment d’imprimer."
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// ─── Intégration des images en base64 ──────────────────────────────────────\n// Chaque image rapatriée devient une URL « data: ». Une image absente est\n// simplement retirée de l'article : mieux vaut pas de visuel qu'un cadre vide.\n\nconst articles = $('Extraire et surligner les chiffres').all().map((i) => ({ ...i.json }));\nconst cibles = $('Préparer les images').all().map((i) => i.json);\nconst recues = $input.all();\n\nconst parUrl = new Map();\nfor (let i = 0; i < recues.length; i++) {\n  const cible = cibles[i];\n  if (!cible || cible.sentinelle) continue;\n  const bin = recues[i].binary?.data;\n  if (!bin) continue;\n  const type = String(bin.mimeType || '');\n  if (!/^image\\//i.test(type)) continue;\n  let buf = null;\n  try { buf = await this.helpers.getBinaryDataBuffer(i, 'data'); } catch (e) { /* voir repli */ }\n  if (!buf && typeof bin.data === 'string' && bin.data.length > 256) buf = Buffer.from(bin.data, 'base64');\n  if (!buf || buf.length < 512) continue;                 // réponse vide ou pixel de suivi\n  parUrl.set(cible.origine, `data:${type};base64,${buf.toString('base64')}`);\n}\n\nlet integrees = 0, retirees = 0;\nfor (const a of articles) {\n  if (!a.image) continue;\n  const d = parUrl.get(a.image);\n  if (d) { a.image = d; integrees++; }\n  else { a.image = ''; retirees++; }\n}\n\nreturn articles.map((a, i) => ({\n  json: i === 0 ? { ...a, imagesIntegrees: integrees, imagesRetirees: retirees } : a,\n}));\n"
+      },
+      "id": "int-grer-les-images",
+      "name": "Intégrer les images",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3580,
+        100
+      ],
+      "notes": "Convertit chaque visuel en URL « data: ». Une image absente est retirée plutôt que laissée en cadre vide.",
+      "notesInFlow": false
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// ─── Composition du rapport HTML (converti en PDF à l'étape suivante) ──────\n\nconst articles = $input.all().map((i) => i.json);\nconst cfg = articles[0].cfg;\nconst ORDRE = ['Le Monde', 'Le Figaro', 'Le Parisien', 'Libération', 'La Croix'];\n\nconst esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\"/g, '&quot;');\nconst MOIS = ['janvier','février','mars','avril','mai','juin','juillet','août','septembre','octobre','novembre','décembre'];\nconst jourLong = (d) => `${d.getDate()} ${MOIS[d.getMonth()]} ${d.getFullYear()}`;\nconst jourCourt = (d) => `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}`;\nconst heure = (d) => `${String(d.getHours()).padStart(2,'0')}h${String(d.getMinutes()).padStart(2,'0')}`;\n\nconst dates = articles.map((a) => new Date(a.date)).sort((a, b) => a - b);\nconst debut = dates[0], fin = dates[dates.length - 1];\nconst periode = debut.toDateString() === fin.toDateString()\n  ? `du ${jourLong(fin)}`\n  : `du ${debut.getDate()} ${debut.getMonth() === fin.getMonth() ? '' : MOIS[debut.getMonth()] + ' '}au ${jourLong(fin)}`;\n\n// ── Sujets couverts par plusieurs journaux ─────────────────────────────────\nconst VIDES = new Set(['dans','pour','avec','plus','sans','sous','leur','leurs','cette','cet','les','des','une','aux','que','qui','quoi','mais','donc','elle','elles','ils','son','sea','ses','est','sont','être','avoir','fait','faire','après','avant','entre','vers','chez','contre','tout','tous','toute','toutes','comme','encore','déjà','très','bien','peut','veut','face','selon','direct','notre','votre','nouvelle','nouveau','ans']);\nconst jetons = (t) => new Set(\n  t.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')\n   .replace(/[^a-z0-9]+/g, ' ').split(' ')\n   .filter((m) => m.length >= 4 && !VIDES.has(m))\n);\nconst jaccard = (a, b) => {\n  let inter = 0;\n  for (const x of a) if (b.has(x)) inter++;\n  return inter / (a.size + b.size - inter || 1);\n};\nconst avecJetons = articles.map((a) => ({ a, j: jetons(a.titre) }));\nconst utilises = new Set();\nconst sujets = [];\nfor (let i = 0; i < avecJetons.length; i++) {\n  if (utilises.has(i)) continue;\n  const groupe = [i];\n  for (let k = i + 1; k < avecJetons.length; k++) {\n    if (utilises.has(k)) continue;\n    if (avecJetons[k].a.source === avecJetons[i].a.source) continue;\n    if (jaccard(avecJetons[i].j, avecJetons[k].j) >= cfg.seuilSujetCommun) { groupe.push(k); utilises.add(k); }\n  }\n  if (groupe.length > 1) { groupe.forEach((g) => utilises.add(g)); sujets.push(groupe.map((g) => avecJetons[g].a)); }\n}\nsujets.sort((x, y) => y.length - x.length);\n\n// ── Chiffres marquants (toutes sources confondues) ─────────────────────────\nconst vus = new Set();\nconst chiffresCles = articles\n  .flatMap((a) => (a.chiffres || []).map((c) => ({ ...c, article: a })))\n  .sort((x, y) => y.score - x.score)\n  .filter((c) => {\n    const k = c.texte.toLowerCase().replace(/\\s+/g, ' ');\n    if (vus.has(k) || c.type === 'periode') return false;\n    vus.add(k); return true;\n  })\n  .slice(0, cfg.maxChiffresMarquants);\n\n// ── Importance d'un article ────────────────────────────────────────────────\n// Trois signaux, par ordre de poids : un développement rédigé à partir d'une\n// source libre, une couverture par plusieurs quotidiens, et la densité de\n// données chiffrées.\nconst dansSujet = new Map();\nsujets.forEach((groupe, i) => groupe.forEach((a) => dansSujet.set(a.lien, { rang: i, taille: groupe.length })));\n\nconst importance = (a) => {\n  let n = 0;\n  if (a.developpement?.paragraphesHtml?.length) n += 100 + (a.developpement.score || 0) * 20;\n  const g = dansSujet.get(a.lien);\n  if (g) n += 40 * (g.taille - 1);\n  n += Math.min(a.scoreChiffres || 0, 60) / 2;\n  if (a.rubrique === 'une') n += 15;\n  if (/^\\s*(?:EN DIRECT|EN IMAGES|DIRECT)\\b/i.test(a.titre)) n -= 30;\n  return n;\n};\n\n// Entrent dans « L'essentiel » les sujets développés et ceux traités par\n// plusieurs titres : ce sont les seuls dont l'importance est établie par un\n// fait, pas par une heuristique.\nconst aDev = (a) => (a.developpement?.paragraphesHtml?.length ? 1 : 0);\n\n// Un même événement traité par cinq quotidiens ne doit occuper qu'une entrée :\n// on retient le meilleur article et on signale les autres titres.\nconst candidats = articles\n  .filter((a) => aDev(a) || dansSujet.has(a.lien))\n  .sort((x, y) => aDev(y) - aDev(x) || importance(y) - importance(x));\n\n// Deux titres qui partagent au moins deux noms propres marquants parlent du\n// même événement, même s'ils n'ont presque aucun mot commun par ailleurs\n// (« cordon sanitaire » et « onde de choc » autour de « Saxe-Anhalt »).\nconst MOTS_COURANTS = new Set(['France','Paris','Europe','Allemagne','Etats','Unis','Monde','Figaro','Croix','Parisien','Direct','Info']);\nconst nomsPropres = (t) => {\n  const sortie = new Set();\n  for (const brut of String(t).match(/[A-ZÀ-Ý][\\wÀ-ÿ'’-]{3,}/g) || []) {\n    const m = brut.replace(/[’']s?$/, '');\n    if (MOTS_COURANTS.has(m)) continue;\n    const norm = (x) => x.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');\n    sortie.add(norm(m));\n    // « Saxe-Anhalt » vaut aussi « saxe » et « anhalt » : sans cela un nom\n    // composé ne pèse qu'une unité et deux titres sur le même lieu ne se\n    // rapprochent pas.\n    if (m.includes('-')) m.split('-').filter((x) => x.length >= 4).forEach((x) => sortie.add(norm(x)));\n  }\n  return sortie;\n};\nconst communs = (a, b) => { let n = 0; for (const x of a) if (b.has(x)) n++; return n; };\n\nconst essentiel = [];\nconst jetonsGardes = [];\nlet sansDev = 0;\nfor (const a of candidats) {\n  if (essentiel.length >= cfg.maxEssentiel) break;\n  // Les sujets sans développement ne doivent pas noyer les autres.\n  if (!aDev(a) && sansDev >= cfg.maxEssentielSansDev) continue;\n  const ja = jetons(a.titre);\n  const groupe = dansSujet.get(a.lien);\n  const na = nomsPropres(a.titre);\n  let i = jetonsGardes.findIndex((g) =>\n    (groupe && g.groupe && g.groupe.rang === groupe.rang)\n    || jaccard(ja, g.jetons) >= 0.30\n    || communs(na, g.noms) >= 2);\n  if (i >= 0) {\n    // Même sujet : on garde l'angle de ce journal plutôt qu'un simple nom.\n    const d = essentiel[i];\n    if (d.source !== a.source && !d.angles.some((x) => x.source === a.source)) {\n      d.angles.push({\n        source: a.source, couleur: a.couleur, lien: a.lien,\n        titreHtml: a.titreHtml, resumeHtml: a.resumeHtml,\n      });\n    }\n    continue;\n  }\n  essentiel.push({ ...a, angles: [] });\n  if (!aDev(a)) sansDev++;\n  jetonsGardes.push({ jetons: ja, groupe, noms: na });\n}\nconst nbDeveloppes = essentiel.filter(aDev).length;\n\n// Deux niveaux : les sujets majeurs (développés, souvent repris par plusieurs\n// titres) passent en grand format ; les autres suivent en format compact.\nconst tempsForts = essentiel.filter(aDev).slice(0, cfg.maxTempsForts);\nconst cleForts = new Set(tempsForts.map((a) => a.lien));\nconst reste = essentiel.filter((a) => !cleForts.has(a.lien));\n// On exclut des sections journal l'article retenu ET ses doublons de sujet.\nconst dansEssentiel = new Set();\nessentiel.forEach((e) => {\n  dansEssentiel.add(e.lien);\n  const je = jetons(e.titre);\n  const ge = dansSujet.get(e.lien);\n  for (const a of candidats) {\n    const ga = dansSujet.get(a.lien);\n    if ((ge && ga && ge.rang === ga.rang)\n        || jaccard(je, jetons(a.titre)) >= 0.30\n        || communs(nomsPropres(e.titre), nomsPropres(a.titre)) >= 2) dansEssentiel.add(a.lien);\n  }\n});\n\n// ── Regroupement par journal ───────────────────────────────────────────────\nconst parSource = new Map();\nfor (const a of articles) {\n  if (!parSource.has(a.source)) parSource.set(a.source, []);\n  parSource.get(a.source).push(a);\n}\nconst journaux = ORDRE.filter((s) => parSource.has(s)).map((s) => {\n  const liste = parSource.get(s).sort((a, b) => new Date(b.date) - new Date(a.date));\n  // Un journal dont le flux « une » n'est pas exploitable (Le Parisien ne publie\n  // que des archives) mettrait sinon zéro article en avant : on prend les plus récents.\n  // Les articles déjà traités dans « L'essentiel » ne sont pas repris ici.\n  const restants = liste.filter((a) => !dansEssentiel.has(a.lien));\n  let une = restants.filter((a) => a.rubrique === 'une').slice(0, cfg.maxUneParSource);\n  if (une.length === 0) une = restants.slice(0, cfg.maxUneParSource);\n  // Les articles développés d'abord, puis les autres : le lecteur trouve la\n  // matière en haut de section, les sujets secondaires en dessous puis en bref.\n  // Les directs (« EN DIRECT… ») sont des pages mouvantes, souvent périmées à\n  // la lecture : ils restent présents mais passent après les articles fermés.\n  const estDirect = (a) => /^\\s*(?:EN DIRECT|EN IMAGES|DIRECT)\\b/i.test(a.titre);\n  une.sort((a, b) => {\n    const da = a.developpement?.paragraphesHtml?.length ? 1 : 0;\n    const db = b.developpement?.paragraphesHtml?.length ? 1 : 0;\n    if (da !== db) return db - da;\n    const la = estDirect(a) ? 1 : 0, lb = estDirect(b) ? 1 : 0;\n    if (la !== lb) return la - lb;\n    return new Date(b.date) - new Date(a.date);\n  });\n  const cleUne = new Set(une.map((a) => a.lien));\n  return {\n    source: s, couleur: liste[0].couleur, total: liste.length, une,\n    breves: restants.filter((a) => !cleUne.has(a.lien)).slice(0, cfg.maxBrevesParSource),\n    dansEssentiel: liste.filter((a) => dansEssentiel.has(a.lien)).length,\n  };\n});\n\n// ── Réduction des images à la source ───────────────────────────────────────\n// Les CDN des journaux acceptent une taille dans l'URL : on demande une version\n// légère, sinon le PDF atteint des dizaines de Mo (images en pleine résolution).\nconst reduireImage = (url) => {\n  if (!url) return '';\n  if (String(url).startsWith('data:')) return url;   // déjà intégrée\n  try {\n    const u = String(url);\n    if (/img\\.lemde\\.fr/.test(u))      return u.replace(/\\/\\d{3,4}\\/\\d{3,4}\\/(\\d{1,3})\\/(\\d)\\//, '/644/322/$1/$2/');\n    if (/i\\.f1g\\.fr/.test(u))          return u.replace(/\\/media\\/cms\\/[^/]+\\//, '/media/cms/704x396_crop/');\n    if (/i\\.la-croix\\.com/.test(u))    return u.replace(/^(https?:\\/\\/i\\.la-croix\\.com)\\/[^/]+\\//, '$1/620x412/');\n    return u;  // Le Parisien signe ses URL de redimensionnement : on n'y touche pas\n  } catch (e) { return String(url); }\n};\n\n// ── Fragments HTML ─────────────────────────────────────────────────────────\nconst puces = (a) => (a.chiffres || []).slice(0, 4)\n  .map((c) => `<span class=\"puce puce--${c.type}\">${esc(c.texte)}</span>`).join('');\n\n// Le bloc porte le titre de l'article source, jamais celui de l'article du\n// quotidien : un rapprochement erroné se voit alors immédiatement, au lieu\n// d'attribuer un texte au mauvais sujet.\nconst blocDeveloppement = (a) => {\n  const d = a.developpement;\n  if (!d?.paragraphesHtml?.length) return '';\n  return `\n    <div class=\"dev\">\n      <div class=\"dev-chapeau\">Développement · ${esc(d.source)}</div>\n      <div class=\"dev-titre\">${esc(d.titre)}</div>\n      ${d.paragraphesHtml.map((p) => `<p class=\"dev-texte\">${p}</p>`).join('')}\n    </div>`;\n};\n\n// Un même événement vu par plusieurs rédactions : on juxtapose leurs titres et\n// leurs chapôs tels quels. Ce sont leurs angles, dans leurs mots, attribuables.\nconst blocAngles = (a) => {\n  if (!a.angles?.length) return '';\n  return `\n    <div class=\"angles\">\n      <div class=\"angles-titre\">Le même sujet vu par ${a.angles.length} autre${a.angles.length > 1 ? 's' : ''} titre${a.angles.length > 1 ? 's' : ''}</div>\n      ${a.angles.map((x) => `\n        <div class=\"angle\">\n          <span class=\"tag\" style=\"background:${x.couleur}\">${esc(x.source)}</span>\n          <div class=\"angle-corps\">\n            <div class=\"angle-titre\">${x.titreHtml}</div>\n            ${x.resumeHtml ? `<div class=\"angle-resume\">${x.resumeHtml}</div>` : ''}\n          </div>\n        </div>`).join('')}\n    </div>`;\n};\n\nconst carteFort = (a) => `\n  <article class=\"fort\">\n    ${a.image ? `<div class=\"fort-img\"><img src=\"${esc(reduireImage(a.image))}\" alt=\"\"></div>` : ''}\n    <div class=\"fort-meta\">\n      <span class=\"badge\" style=\"background:${a.couleur}\">${esc(a.source)}</span>\n      ${esc(a.categorie || '')}${a.categorie ? ' · ' : ''}${jourCourt(new Date(a.date))} ${heure(new Date(a.date))}\n      ${a.angles?.length ? ` · repris par ${a.angles.length} autre${a.angles.length > 1 ? 's' : ''} titre${a.angles.length > 1 ? 's' : ''}` : ''}\n    </div>\n    <h3 class=\"fort-titre\">${a.titreHtml}</h3>\n    ${a.resumeHtml ? `<p class=\"fort-resume\">${a.resumeHtml}</p>` : ''}\n    ${a.chiffres && a.chiffres.length ? `<div class=\"puces\">${puces(a)}</div>` : ''}\n    ${blocDeveloppement(a)}\n    ${blocAngles(a)}\n    <a class=\"lien\" href=\"${esc(a.lien)}\">${esc(a.lien.replace(/^https?:\\/\\/(www\\.)?/, '').slice(0, 92))}…</a>\n  </article>`;\n\nconst carteEssentiel = (a) => `\n  <article class=\"carte carte--essentiel\">\n    ${a.image ? `<div class=\"carte-img\"><img src=\"${esc(reduireImage(a.image))}\" alt=\"\"></div>` : ''}\n    <div class=\"carte-txt\">\n      <div class=\"carte-meta\">\n        <span class=\"badge\" style=\"background:${a.couleur}\">${esc(a.source)}</span>\n        ${esc(a.categorie || '')}${a.categorie ? ' · ' : ''}${jourCourt(new Date(a.date))} ${heure(new Date(a.date))}\n      </div>\n      <h3 class=\"carte-titre\">${a.titreHtml}</h3>\n      ${a.resumeHtml ? `<p class=\"carte-resume\">${a.resumeHtml}</p>` : ''}\n      ${a.chiffres && a.chiffres.length ? `<div class=\"puces\">${puces(a)}</div>` : ''}\n      ${blocDeveloppement(a)}\n      ${blocAngles(a)}\n      <a class=\"lien\" href=\"${esc(a.lien)}\">${esc(a.lien.replace(/^https?:\\/\\/(www\\.)?/, '').slice(0, 92))}…</a>\n    </div>\n  </article>`;\n\nconst carteUne = (a) => `\n  <article class=\"carte\">\n    ${a.image ? `<div class=\"carte-img\"><img src=\"${esc(reduireImage(a.image))}\" alt=\"\"></div>` : ''}\n    <div class=\"carte-txt\">\n      <div class=\"carte-meta\">${[esc(a.categorie || a.fluxLibelle || ''), `${jourCourt(new Date(a.date))} ${heure(new Date(a.date))}`].filter(Boolean).join(' · ')}</div>\n      <h3 class=\"carte-titre\">${a.titreHtml}</h3>\n      ${a.resumeHtml ? `<p class=\"carte-resume\">${a.resumeHtml}</p>` : ''}\n      ${a.chiffres && a.chiffres.length ? `<div class=\"puces\">${puces(a)}</div>` : ''}\n      ${blocDeveloppement(a)}\n      <a class=\"lien\" href=\"${esc(a.lien)}\">${esc(a.lien.replace(/^https?:\\/\\/(www\\.)?/, '').slice(0, 92))}…</a>\n    </div>\n  </article>`;\n\nconst ligneBreve = (a) => `\n  <li class=\"breve\">\n    <span class=\"breve-date\">${jourCourt(new Date(a.date))}</span>\n    <span class=\"breve-corps\">\n      <a class=\"breve-titre\" href=\"${esc(a.lien)}\">${a.titreHtml}</a>\n      ${a.resumeHtml ? `<span class=\"breve-resume\">${a.resumeHtml}</span>` : ''}\n    </span>\n  </li>`;\n\nconst html = `<!doctype html><html lang=\"fr\"><head><meta charset=\"utf-8\"><title>Revue de presse</title><style>\n*{box-sizing:border-box}\nhtml{-webkit-print-color-adjust:exact;print-color-adjust:exact}\nbody{margin:0;font:10.5pt/1.5 Georgia,\"Times New Roman\",\"DejaVu Serif\",serif;color:#16181d;background:#fff}\nh1,h2,h3,.ui{font-family:\"Helvetica Neue\",Helvetica,Arial,\"DejaVu Sans\",sans-serif}\na{color:inherit;text-decoration:none}\n\n/* Surlignage des données chiffrées */\n.chiffre{padding:.06em .3em;border-radius:3px;font-weight:700;white-space:nowrap;border-bottom:2px solid}\n.chiffre--pourcentage{background:#fef1c7;color:#8a4b06;border-color:#f0b429}\n.chiffre--montant{background:#d9f7e3;color:#10633a;border-color:#34a86b}\n.chiffre--volume{background:#dbe8ff;color:#17408f;border-color:#4f80e8}\n.chiffre--periode{background:#ece8fb;color:#54329c;border-color:#8b6ee0}\n\n.puces{margin:.5em 0 .35em;display:flex;flex-wrap:wrap;gap:4px}\n.puce{font-family:\"Helvetica Neue\",Arial,sans-serif;font-size:7.6pt;font-weight:700;letter-spacing:.01em;\n      padding:2.5px 7px;border-radius:20px;border:1px solid;white-space:nowrap}\n.puce--pourcentage{background:#fef1c7;color:#8a4b06;border-color:#e5a72a}\n.puce--montant{background:#d9f7e3;color:#10633a;border-color:#2f9c62}\n.puce--volume{background:#dbe8ff;color:#17408f;border-color:#4272d6}\n.puce--periode{background:#ece8fb;color:#54329c;border-color:#7f61d8}\n\n/* ── Couverture ── */\n.couverture{break-after:page;padding-bottom:6mm}\n.bandeau{background:#16181d;color:#fff;padding:16mm 10mm 11mm;margin:0 0 8mm}\n.surtitre{font-family:\"Helvetica Neue\",Arial,sans-serif;font-size:8.5pt;letter-spacing:.22em;\n          text-transform:uppercase;color:#a7adba;margin-bottom:6mm}\n.bandeau h1{font-family:Georgia,\"DejaVu Serif\",serif;font-size:33pt;line-height:1.06;margin:0 0 5mm;font-weight:400}\n.bandeau .periode{font-size:12pt;color:#e7e9ee;margin:0}\n.bandeau .sous{font-family:\"Helvetica Neue\",Arial,sans-serif;font-size:9pt;color:#8f96a4;margin-top:4mm}\n\n.compteurs{display:flex;gap:0;border-top:1.5px solid #16181d;border-bottom:1.5px solid #16181d;margin-bottom:8mm}\n.compteur{flex:1;padding:4mm 3mm;border-right:1px solid #d9dce2;text-align:center}\n.compteur:last-child{border-right:0}\n.compteur .n{font-family:\"Helvetica Neue\",Arial,sans-serif;font-size:20pt;font-weight:800;line-height:1}\n.compteur .s{font-family:\"Helvetica Neue\",Arial,sans-serif;font-size:7.8pt;text-transform:uppercase;\n             letter-spacing:.07em;color:#5c6270;margin-top:2mm}\n.compteur .bar{height:3px;margin:3mm auto 0;width:60%}\n\n.section-titre{font-size:8.6pt;font-family:\"Helvetica Neue\",Arial,sans-serif;letter-spacing:.16em;\n               text-transform:uppercase;color:#5c6270;border-bottom:1px solid #c9cdd6;\n               padding-bottom:2.5mm;margin:0 0 5mm}\n.zone{padding:0 10mm}\n\n.grille-chiffres{display:grid;grid-template-columns:repeat(3,1fr);gap:4mm;margin-bottom:8mm}\n.bloc-chiffre{border:1px solid #dfe2e8;border-left-width:4px;border-radius:3px;padding:3.5mm 4mm;break-inside:avoid}\n.bloc-chiffre.t-pourcentage{border-left-color:#e5a72a}\n.bloc-chiffre.t-montant{border-left-color:#2f9c62}\n.bloc-chiffre.t-volume{border-left-color:#4272d6}\n.bloc-chiffre .v{font-family:\"Helvetica Neue\",Arial,sans-serif;font-size:14pt;font-weight:800;line-height:1.15;margin-bottom:2mm}\n.bloc-chiffre .c{font-size:8.4pt;line-height:1.4;color:#3d434f}\n.bloc-chiffre .j{font-family:\"Helvetica Neue\",Arial,sans-serif;font-size:7.2pt;text-transform:uppercase;\n                 letter-spacing:.08em;color:#7a8090;margin-top:2mm}\n\n.sujet{border-left:3px solid #16181d;padding:2mm 0 2mm 4mm;margin-bottom:4.5mm;break-inside:avoid}\n.sujet h4{font-family:Georgia,serif;font-weight:400;font-size:11pt;margin:0 0 2mm;line-height:1.3}\n.sujet .titres{font-family:\"Helvetica Neue\",Arial,sans-serif;font-size:8pt;color:#5c6270}\n.tag{display:inline-block;font-size:7.4pt;font-weight:700;padding:1.5px 6px;border-radius:2px;\n     color:#fff;margin-right:4px;text-transform:uppercase;letter-spacing:.05em}\n\n.legende{display:flex;gap:5mm;flex-wrap:wrap;font-family:\"Helvetica Neue\",Arial,sans-serif;\n         font-size:8pt;color:#5c6270;border-top:1px solid #dfe2e8;padding-top:3.5mm}\n\n/* ── Sections par journal ── */\n.journal{break-before:page;padding:0 10mm}\n.journal-entete{display:flex;align-items:baseline;gap:4mm;border-bottom:2.5px solid;padding-bottom:3mm;margin-bottom:6mm}\n.journal-entete h2{font-family:Georgia,\"DejaVu Serif\",serif;font-size:23pt;font-weight:400;margin:0}\n.journal-entete .n{font-family:\"Helvetica Neue\",Arial,sans-serif;font-size:8.5pt;color:#6b7280;margin-left:auto}\n\n.fort{padding-bottom:7mm;margin-bottom:7mm;border-bottom:2px solid #16181d;break-inside:avoid}\n.fort:last-child{border-bottom:0;margin-bottom:0}\n.fort-img img{width:100%;height:52mm;object-fit:cover;border-radius:3px;display:block;background:#eef0f4;margin-bottom:3.5mm}\n.fort-meta{font-family:\"Helvetica Neue\",Arial,sans-serif;font-size:7.6pt;text-transform:uppercase;\n           letter-spacing:.07em;color:#8a90a0;margin-bottom:2.5mm}\n.fort-titre{font-family:Georgia,\"DejaVu Serif\",serif;font-size:17pt;font-weight:700;line-height:1.2;margin:0 0 3mm}\n.fort-resume{margin:0 0 2mm;font-size:11pt;line-height:1.55;color:#2b303a}\n.sommaire{display:flex;gap:0;border-top:1px solid #dfe2e8;margin-top:6mm;padding-top:4mm;\n          font-family:\"Helvetica Neue\",Arial,sans-serif;font-size:8pt;color:#5c6270}\n.sommaire div{flex:1;border-right:1px solid #e7e9ee;padding:0 3mm}\n.sommaire div:first-child{padding-left:0}\n.sommaire div:last-child{border-right:0}\n.sommaire b{display:block;color:#16181d;font-size:9pt;margin-bottom:1mm}\n.angles{margin:3mm 0 1mm;padding:3mm 0 0;border-top:1px solid #dfe2e8;break-inside:avoid}\n.angles-titre{font-family:\"Helvetica Neue\",Arial,sans-serif;font-size:7pt;text-transform:uppercase;\n              letter-spacing:.12em;color:#8a90a0;font-weight:700;margin-bottom:2.5mm}\n.angle{display:flex;gap:3mm;margin-bottom:2.5mm;align-items:flex-start}\n.angle:last-child{margin-bottom:0}\n.angle .tag{flex:0 0 auto;margin-top:.4mm}\n.angle-corps{flex:1;min-width:0}\n.angle-titre{font-family:Georgia,serif;font-size:9.2pt;font-weight:700;line-height:1.3;margin-bottom:.8mm}\n.angle-resume{font-size:8.4pt;line-height:1.45;color:#4a505c}\n.aussi{font-family:\"Helvetica Neue\",Arial,sans-serif;font-size:7.6pt;color:#6b7280;margin:2mm 0 1mm}\n.aussi .tag{margin-left:3px}\n.badge{display:inline-block;color:#fff;font-size:7pt;font-weight:700;letter-spacing:.05em;\n       padding:1.5px 6px;border-radius:2px;margin-right:5px;text-transform:uppercase}\n.carte--essentiel{border-bottom:1px solid #d9dce2;padding-bottom:6mm;margin-bottom:6mm}\n.essentiel{padding:0 10mm;break-after:page}\n.essentiel-entete{border-bottom:2.5px solid #16181d;padding-bottom:3mm;margin-bottom:6mm;\n                  display:flex;align-items:baseline;gap:4mm}\n.essentiel-entete h2{font-family:Georgia,\"DejaVu Serif\",serif;font-size:23pt;font-weight:400;margin:0}\n.essentiel-entete .n{font-family:\"Helvetica Neue\",Arial,sans-serif;font-size:8.5pt;color:#6b7280;margin-left:auto}\n.carte{display:flex;gap:5mm;padding-bottom:5mm;margin-bottom:5mm;border-bottom:1px solid #e7e9ee;break-inside:avoid}\n.carte-img{flex:0 0 42mm}\n.carte-img img{width:42mm;height:28mm;object-fit:cover;border-radius:2px;display:block;background:#eef0f4}\n.carte-txt{flex:1;min-width:0}\n.carte-meta{font-family:\"Helvetica Neue\",Arial,sans-serif;font-size:7.4pt;text-transform:uppercase;\n            letter-spacing:.08em;color:#8a90a0;margin-bottom:1.8mm}\n.carte-titre{font-family:Georgia,serif;font-size:12.5pt;font-weight:700;line-height:1.28;margin:0 0 2mm}\n.carte-resume{margin:0;font-size:9.6pt;line-height:1.5;color:#333844}\n.dev{margin:3mm 0 2mm;padding:3mm 4mm;background:#f6f7f9;border-left:3px solid #0a3d62;border-radius:0 3px 3px 0;break-inside:avoid}\n.dev-chapeau{font-family:\"Helvetica Neue\",Arial,sans-serif;font-size:7pt;text-transform:uppercase;\n             letter-spacing:.12em;color:#0a3d62;font-weight:700;margin-bottom:1.5mm}\n.dev-titre{font-family:Georgia,serif;font-size:9.6pt;font-weight:700;line-height:1.3;margin:0 0 2mm;color:#16181d}\n.dev-texte{margin:0 0 1.8mm;font-size:8.9pt;line-height:1.5;color:#333844}\n.dev-texte:last-of-type{margin-bottom:0}\n.lien{display:block;font-family:\"Helvetica Neue\",Arial,sans-serif;font-size:7pt;color:#989eae;margin-top:2mm;word-break:break-all}\n\n.breves{list-style:none;padding:0;margin:0;column-count:2;column-gap:7mm}\n.breve{display:flex;gap:2.5mm;font-size:9pt;line-height:1.45;padding:2mm 0;\n       border-bottom:1px dotted #d9dce2;break-inside:avoid}\n.breve-date{font-family:\"Helvetica Neue\",Arial,sans-serif;font-size:7.4pt;font-weight:700;color:#989eae;\n            padding-top:.6mm;flex:0 0 9mm}\n.breve-corps{flex:1;min-width:0}\n.breve-titre{font-weight:700;display:block;margin-bottom:.8mm}\n.breve-resume{color:#525863;font-size:8.4pt;line-height:1.42;display:block}\n.sous-titre{font-family:\"Helvetica Neue\",Arial,sans-serif;font-size:8.4pt;text-transform:uppercase;\n            letter-spacing:.14em;color:#5c6270;margin:7mm 0 4mm;break-after:avoid}\n</style></head><body>\n\n<section class=\"couverture\">\n  <div class=\"bandeau\">\n    <div class=\"surtitre\">Veille presse quotidienne · 5 titres nationaux</div>\n    <h1>Revue de presse</h1>\n    <p class=\"periode\">${periode}</p>\n    <div class=\"sous\">${articles.length} articles collectés · ${journaux.length} journaux · généré le ${jourLong(new Date())} à ${heure(new Date())}</div>\n  </div>\n\n  <div class=\"zone\">\n    <div class=\"compteurs\">\n      ${journaux.map((j) => `<div class=\"compteur\"><div class=\"n\">${j.total}</div><div class=\"s\">${esc(j.source)}</div><div class=\"bar\" style=\"background:${j.couleur}\"></div></div>`).join('')}\n    </div>\n\n    ${chiffresCles.length ? `\n    <h3 class=\"section-titre\">Les chiffres qui ressortent</h3>\n    <div class=\"grille-chiffres\">\n      ${chiffresCles.map((c) => `\n        <div class=\"bloc-chiffre t-${c.type}\">\n          <div class=\"v\">${esc(c.texte)}</div>\n          <div class=\"c\">${esc(c.article.titre.slice(0, 105))}${c.article.titre.length > 105 ? '…' : ''}</div>\n          <div class=\"j\">${esc(c.article.source)}</div>\n        </div>`).join('')}\n    </div>` : ''}\n\n    ${sujets.length ? `\n    <h3 class=\"section-titre\">Sujets traités par plusieurs titres</h3>\n    ${sujets.slice(0, 6).map((g) => `\n      <div class=\"sujet\">\n        <h4>${g[0].titreHtml}</h4>\n        <div class=\"titres\">${g.map((a) => `<span class=\"tag\" style=\"background:${a.couleur}\">${esc(a.source)}</span>`).join('')}</div>\n      </div>`).join('')}` : ''}\n\n    <div class=\"sommaire\">\n      <div><b>Les temps forts</b>${tempsForts.length} sujet${tempsForts.length > 1 ? 's' : ''} majeur${tempsForts.length > 1 ? 's' : ''}, développés à partir de sources libres et confrontés entre titres</div>\n      <div><b>L’essentiel</b>${reste.length} sujet${reste.length > 1 ? 's' : ''} suivis, dont ${reste.filter(aDev).length} développé${reste.filter(aDev).length > 1 ? 's' : ''}</div>\n      <div><b>Par journal</b>${journaux.length} sections : les articles mis en avant, puis l’ensemble des brèves</div>\n    </div>\n\n    <div class=\"legende\">\n      <span><span class=\"chiffre chiffre--pourcentage\">%</span> pourcentage</span>\n      <span><span class=\"chiffre chiffre--montant\">€</span> montant</span>\n      <span><span class=\"chiffre chiffre--volume\">123</span> volume / quantité</span>\n      <span><span class=\"chiffre chiffre--periode\">2020-2026</span> période</span>\n    </div>\n  </div>\n</section>\n\n${tempsForts.length ? `\n<section class=\"essentiel\">\n  <div class=\"essentiel-entete\">\n    <h2>Les temps forts</h2>\n    <span class=\"n\">${tempsForts.length} sujet${tempsForts.length > 1 ? 's' : ''} majeur${tempsForts.length > 1 ? 's' : ''}, développé${tempsForts.length > 1 ? 's' : ''} et confrontés</span>\n  </div>\n  ${tempsForts.map(carteFort).join('')}\n</section>` : ''}\n\n${reste.length ? `\n<section class=\"essentiel\">\n  <div class=\"essentiel-entete\">\n    <h2>L’essentiel</h2>\n    <span class=\"n\">${reste.filter(aDev).length} autre${reste.filter(aDev).length > 1 ? 's' : ''} sujet${reste.filter(aDev).length > 1 ? 's' : ''} développé${reste.filter(aDev).length > 1 ? 's' : ''}${reste.length > reste.filter(aDev).length ? ` · ${reste.length - reste.filter(aDev).length} suivi${reste.length - reste.filter(aDev).length > 1 ? 's' : ''} multi-titres` : ''}</span>\n  </div>\n  ${reste.map(carteEssentiel).join('')}\n</section>` : ''}\n\n${journaux.map((j) => `\n<section class=\"journal\">\n  <div class=\"journal-entete\" style=\"border-color:${j.couleur}\">\n    <h2 style=\"color:${j.couleur}\">${esc(j.source)}</h2>\n    <span class=\"n\">${j.total} article${j.total > 1 ? 's' : ''}${j.dansEssentiel ? ` · ${j.dansEssentiel} dans L’essentiel` : ''}</span>\n  </div>\n  ${j.une.length ? `<div class=\"sous-titre\">À la une</div>${j.une.map(carteUne).join('')}` : ''}\n  ${j.breves.length ? `<div class=\"sous-titre\">En bref — ${j.breves.length} autres sujets</div><ul class=\"breves\">${j.breves.map(ligneBreve).join('')}</ul>` : ''}\n</section>`).join('')}\n\n</body></html>`;\n\nconst pied = `<html><head><style>\nbody{font:7pt \"Helvetica Neue\",Arial,sans-serif;color:#989eae;width:100%;margin:0;padding:0 12mm}\n.l{display:flex;justify-content:space-between;border-top:1px solid #dfe2e8;padding-top:2mm}\n</style></head><body><div class=\"l\">\n<span>Revue de presse ${esc(periode)}</span>\n<span>Le Monde · Le Figaro · Le Parisien · Libération · La Croix</span>\n<span class=\"pageNumber\"></span>/<span class=\"totalPages\"></span>\n</div></body></html>`;\n\n// Version de repli : même rapport, sans les visuels. Les images pèsent\n// l'essentiel du PDF (le texte seul fait ~200 Ko), c'est donc le seul levier\n// qui garantisse de repasser sous la limite d'envoi.\nconst htmlLeger = html\n  .replace(/<div class=\"carte-img\">[\\s\\S]*?<\\/div>/g, '')\n  .replace(/\\.carte-txt\\{flex:1;min-width:0\\}/, '.carte-txt{flex:1;min-width:0}\\n.carte{gap:0}');\n\nconst stamp = new Date().toISOString().slice(0, 10);\nconst enBinaire = async (contenu, nom, type) => {\n  try { return await this.helpers.prepareBinaryData(Buffer.from(contenu, 'utf8'), nom, type); }\n  catch (e) {\n    return { data: Buffer.from(contenu, 'utf8').toString('base64'), mimeType: type, fileName: nom, fileExtension: nom.split('.').pop() };\n  }\n};\n\nreturn [{\n  json: {\n    nomFichier: `revue-de-presse-${stamp}.pdf`,\n    sujet: `Revue de presse — les actualités ${periode}`,\n    destinataire: cfg.destinataire,\n    expediteur: cfg.expediteur,\n    periode,\n    nbArticles: articles.length,\n    nbSujetsCommuns: sujets.length,\n    maxPdfMo: cfg.maxPdfMo,\n    repartition: journaux.map((j) => ({ source: j.source, total: j.total, une: j.une.length })),\n    chiffresCles: chiffresCles.map((c) => ({ texte: c.texte, type: c.type, source: c.article.source })),\n  },\n  binary: {\n    'index.html': await enBinaire(html, 'index.html', 'text/html'),\n    'footer.html': await enBinaire(pied, 'footer.html', 'text/html'),\n    'index-leger.html': await enBinaire(htmlLeger, 'index.html', 'text/html'),\n  },\n}];\n"
+      },
+      "id": "composer-le-rapport-html",
+      "name": "Composer le rapport HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1820,
+        100
+      ],
+      "notes": "Produit index.html + footer.html en binaire (couverture, chiffres clés, sujets multi-titres, sections par journal).",
+      "notesInFlow": false
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://gotenberg:3000/forms/chromium/convert/html",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formBinaryData",
+              "name": "files",
+              "inputDataFieldName": "index.html"
+            },
+            {
+              "parameterType": "formBinaryData",
+              "name": "files",
+              "inputDataFieldName": "footer.html"
+            },
+            {
+              "name": "paperWidth",
+              "value": "8.27"
+            },
+            {
+              "name": "paperHeight",
+              "value": "11.7"
+            },
+            {
+              "name": "marginTop",
+              "value": "0.5"
+            },
+            {
+              "name": "marginBottom",
+              "value": "0.6"
+            },
+            {
+              "name": "marginLeft",
+              "value": "0.4"
+            },
+            {
+              "name": "marginRight",
+              "value": "0.4"
+            },
+            {
+              "name": "printBackground",
+              "value": "true"
+            },
+            {
+              "name": "waitDelay",
+              "value": "2s"
+            },
+            {
+              "name": "skipNetworkIdleEvent",
+              "value": "false"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 180000,
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "data"
+            }
+          }
+        }
+      },
+      "id": "pdf-gotenberg",
+      "name": "Convertir en PDF (Gotenberg)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4020,
+        100
+      ],
+      "disabled": false,
+      "notes": "Gotenberg (Chromium sans interface) — fourni par le docker-compose. Aucune clé d’API."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.pdfshift.io/v3/convert/pdf",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ source: $binary[\"index.html\"].data ? Buffer.from($binary[\"index.html\"].data, \"base64\").toString(\"utf8\") : \"\", landscape: false, use_print: true, format: \"A4\" }) }}",
+        "options": {
+          "timeout": 180000,
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "data"
+            }
+          }
+        }
+      },
+      "id": "pdf-pdfshift",
+      "name": "Convertir en PDF (PDFShift — secours)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4020,
+        300
+      ],
+      "disabled": true,
+      "notes": "Variante sans Docker (n8n Cloud) : activer ce nœud, désactiver Gotenberg, brancher une clé PDFShift en Basic Auth."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://compresseur:3001/compress?preset=printer",
+        "sendBody": true,
+        "contentType": "binaryData",
+        "inputDataFieldName": "data",
+        "options": {
+          "timeout": 300000,
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "data"
+            }
+          }
+        }
+      },
+      "id": "compresser",
+      "name": "Compresser le PDF",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4240,
+        100
+      ],
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true,
+      "notes": "Ghostscript en 300 dpi : un rapport illustré passe de ~11,5 Mo à ~2,2 Mo, sans perte visible (les images font 42 mm). Service indisponible → le PDF d’origine est conservé."
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// ─── Contrôle du poids du PDF ──────────────────────────────────────────────\n// Gmail refuse au-delà de 25 Mo. Si le rapport dépasse le seuil même compressé,\n// on bascule sur la version sans images produite par le nœud de composition.\n//\n// Deux pièges du bac à sable n8n, tous deux rencontrés :\n//   · l'opérateur « in » ne fonctionne pas sur les objets exposés (proxies) —\n//     il faut tester la valeur, pas la clé ;\n//   · en mode de stockage « filesystem », la chaîne « data » est une simple\n//     référence de 13 caractères : sa longueur ne dit rien du poids réel.\n// On s'appuie donc sur fileSize, que n8n renseigne dans les deux modes.\n\nconst rapport = $('Composer le rapport HTML').first();\nconst item = $input.first();\nconst limite = (rapport.json.maxPdfMo || 20) * 1024 * 1024;\n\nlet binaire = item.binary?.data ? item.binary : null;\nlet origine = 'compressé';\nif (!binaire) {\n  let brut = null;\n  for (const nom of ['Convertir en PDF (Gotenberg)', 'Convertir en PDF (PDFShift — secours)']) {\n    try { const r = $(nom).first(); if (r?.binary?.data) { brut = r; break; } } catch (e) { /* moteur inactif */ }\n  }\n  if (!brut?.binary?.data) throw new Error('PDF absent : vérifier Gotenberg et le compresseur.');\n  binaire = brut.binary;\n  origine = 'non compressé (compresseur injoignable)';\n}\n\nconst enOctets = (libelle) => {\n  const m = String(libelle || '').match(/([\\d.,]+)\\s*([kMG]?B)/i);\n  if (!m) return 0;\n  const unites = { B: 1, KB: 1000, MB: 1000000, GB: 1000000000 };\n  return Math.round(parseFloat(m[1].replace(',', '.')) * (unites[m[2].toUpperCase()] || 1));\n};\n\nlet octets = enOctets(binaire.data.fileSize);\nif (!octets) {\n  // Repli : contenu en base64 (mode mémoire) puis lecture du buffer.\n  const brut = binaire.data.data;\n  if (typeof brut === 'string' && brut.length > 64) octets = Math.floor(brut.length * 0.75);\n  else {\n    try {\n      const buf = await this.helpers.getBinaryDataBuffer(0, 'data');\n      octets = buf?.length || 0;\n    } catch (e) { /* helper indisponible dans ce contexte */ }\n  }\n}\n\nconst tropLourd = octets > limite;\n\nreturn [{\n  json: {\n    ...rapport.json,\n    origine,\n    tailleOctets: octets,\n    tailleMo: Math.round((octets / 1048576) * 100) / 100,\n    limiteMo: limite / 1048576,\n    tropLourd,\n    versionAllegee: tropLourd,\n  },\n  binary: binaire,\n}];\n"
+      },
+      "id": "v-rifier-la-taille-du-pdf",
+      "name": "Vérifier la taille du PDF",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3580,
+        100
+      ],
+      "notes": "Mesure le poids réel du PDF et décide s’il faut basculer sur la version sans images.",
+      "notesInFlow": false
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "trop-lourd",
+              "leftValue": "={{ $json.tropLourd }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-taille",
+      "name": "PDF trop lourd ?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        4680,
+        100
+      ],
+      "notes": "Sortie « true » : au-delà du seuil, on régénère sans images. Sortie « false » : on envoie tel quel."
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// ─── Bascule vers la version sans images ───────────────────────────────────\n// N'est atteint que si le PDF illustré dépasse le seuil. On repasse à Gotenberg\n// le HTML allégé déjà préparé par le nœud de composition.\n\nconst rapport = $('Composer le rapport HTML').first();\nconst info = $input.first().json;\n\nreturn [{\n  json: info,\n  binary: {\n    'index.html': rapport.binary['index-leger.html'],\n    'footer.html': rapport.binary['footer.html'],\n  },\n}];\n"
+      },
+      "id": "basculer-sur-la-version-all-g-e",
+      "name": "Basculer sur la version allégée",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4020,
+        300
+      ],
+      "notes": "Reprend le HTML sans images déjà produit par le nœud de composition.",
+      "notesInFlow": false
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://gotenberg:3000/forms/chromium/convert/html",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formBinaryData",
+              "name": "files",
+              "inputDataFieldName": "index.html"
+            },
+            {
+              "parameterType": "formBinaryData",
+              "name": "files",
+              "inputDataFieldName": "footer.html"
+            },
+            {
+              "name": "paperWidth",
+              "value": "8.27"
+            },
+            {
+              "name": "paperHeight",
+              "value": "11.7"
+            },
+            {
+              "name": "marginTop",
+              "value": "0.5"
+            },
+            {
+              "name": "marginBottom",
+              "value": "0.6"
+            },
+            {
+              "name": "marginLeft",
+              "value": "0.4"
+            },
+            {
+              "name": "marginRight",
+              "value": "0.4"
+            },
+            {
+              "name": "printBackground",
+              "value": "true"
+            },
+            {
+              "name": "waitDelay",
+              "value": "1s"
+            },
+            {
+              "name": "skipNetworkIdleEvent",
+              "value": "false"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 180000,
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "data"
+            }
+          }
+        }
+      },
+      "id": "pdf-leger",
+      "name": "Convertir en PDF (version allégée)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        5120,
+        300
+      ],
+      "notes": "Deuxième passage, sans visuels : le texte seul pèse environ 200 Ko."
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// ─── Nommage du PDF et corps de l'e-mail ───────────────────────────────────\n\nconst rapport = $('Composer le rapport HTML').first().json;\nconst item = $input.first();\n\n// Le PDF renvoyé par Gotenberg s'appelle « index.pdf » : on le renomme.\nconst bin = item.binary?.data;\nif (!bin) throw new Error('PDF absent : vérifier le nœud de conversion (Gotenberg joignable ?).');\nbin.fileName = rapport.nomFichier;\nbin.fileExtension = 'pdf';\nbin.mimeType = 'application/pdf';\n\nconst puce = (c) => {\n  const teintes = {\n    pourcentage: 'background:#fef1c7;color:#8a4b06;border:1px solid #e5a72a',\n    montant: 'background:#d9f7e3;color:#10633a;border:1px solid #2f9c62',\n    volume: 'background:#dbe8ff;color:#17408f;border:1px solid #4272d6',\n  };\n  return `<span style=\"display:inline-block;${teintes[c.type] || teintes.volume};border-radius:20px;\n    padding:3px 10px;font-size:12px;font-weight:700;margin:0 5px 6px 0;\">${c.texte}</span>`;\n};\n\nconst corpsHtml = `\n<div style=\"font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;max-width:620px;margin:0 auto;color:#16181d\">\n  <div style=\"background:#16181d;color:#fff;padding:26px 28px;border-radius:6px 6px 0 0\">\n    <div style=\"font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:#a7adba;margin-bottom:10px\">\n      Veille presse · 5 titres nationaux</div>\n    <div style=\"font-size:26px;font-weight:600\">Revue de presse</div>\n    <div style=\"font-size:15px;color:#e7e9ee;margin-top:6px\">${rapport.periode}</div>\n  </div>\n  <div style=\"border:1px solid #e2e5ea;border-top:0;border-radius:0 0 6px 6px;padding:24px 28px\">\n    <p style=\"margin:0 0 8px;font-size:16px;line-height:1.55\">\n      Bonjour,\n    </p>\n    <p style=\"margin:0 0 16px;font-size:15px;line-height:1.6\">\n      Voici les actualités ${rapport.periode}, réunies depuis <strong>Le Monde</strong>,\n      <strong>Le Figaro</strong>, <strong>Le Parisien</strong>, <strong>Libération</strong>\n      et <strong>La Croix</strong>.\n    </p>\n    <p style=\"margin:0 0 16px;font-size:15px;line-height:1.6\">\n      Le rapport complet est en pièce jointe : <strong>${rapport.nbArticles} articles</strong>,\n      les unes comme les sujets plus courts. Les données chiffrées y sont surlignées,\n      et les principaux sujets sont développés en quelques paragraphes.\n    </p>\n    <table style=\"width:100%;border-collapse:collapse;font-size:14px;margin-bottom:20px\">\n      ${rapport.repartition.map((r) => `\n      <tr>\n        <td style=\"padding:7px 0;border-bottom:1px solid #eef0f4\">${r.source}</td>\n        <td style=\"padding:7px 0;border-bottom:1px solid #eef0f4;text-align:right;color:#5c6270\">\n          ${r.total} article${r.total > 1 ? 's' : ''} · ${r.une} à la une</td>\n      </tr>`).join('')}\n    </table>\n    ${rapport.chiffresCles.length ? `\n      <div style=\"font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#5c6270;margin-bottom:10px\">\n        Chiffres qui ressortent</div>\n      <div>${rapport.chiffresCles.slice(0, 8).map(puce).join('')}</div>` : ''}\n    ${rapport.nbSujetsCommuns ? `\n      <p style=\"margin:18px 0 0;font-size:13px;color:#5c6270\">\n        ${rapport.nbSujetsCommuns} sujet${rapport.nbSujetsCommuns > 1 ? 's' : ''} traité${rapport.nbSujetsCommuns > 1 ? 's' : ''}\n        par plusieurs journaux — détaillé${rapport.nbSujetsCommuns > 1 ? 's' : ''} en page de garde.</p>` : ''}\n    <p style=\"margin:22px 0 0;font-size:14px;line-height:1.6\">Bonne lecture.</p>\n    <p style=\"margin:18px 0 0;font-size:12px;color:#989eae;border-top:1px solid #eef0f4;padding-top:14px\">\n      Sources : flux RSS officiels des cinq quotidiens ; développements tirés de France Info,\n      France 24, RFI et Euronews, avec mention de leur origine.\n      Rapport généré automatiquement tous les 3 jours à 8 h.\n    </p>\n  </div>\n</div>`;\n\nreturn [{ json: { ...rapport, corpsHtml }, binary: item.binary }];\n"
+      },
+      "id": "pr-parer-l-envoi",
+      "name": "Préparer l’envoi",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2260,
+        100
+      ],
+      "notes": "Renomme le PDF et compose le corps de l’e-mail.",
+      "notesInFlow": false
+    },
+    {
+      "parameters": {
+        "operation": "write",
+        "fileName": "=/data/rapports/{{ $json.nomFichier }}",
+        "dataPropertyName": "data",
+        "options": {}
+      },
+      "id": "archive",
+      "name": "Enregistrer le PDF",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        5560,
+        260
+      ],
+      "notes": "Archive le rapport dans ./rapports du projet (monté sur /data/rapports dans le conteneur)."
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// ─── Mémoire d'un rapport à l'autre ────────────────────────────────────────\n// Conserve la date de l'envoi et les liens déjà expédiés, pour que le rapport\n// suivant reparte exactement d'où celui-ci s'arrête : ni trou après une\n// exécution retardée, ni doublon après un lancement manuel.\n\nconst articles = $('Extraire et surligner les chiffres').all().map((i) => i.json);\nconst info = $input.first();\n\nconst liensActuels = articles.map((a) => a.lien.split('?')[0].replace(/\\/$/, ''));\nconst anciens = $('Configuration').first().json.dejaEnvoyes || [];\n\n// On garde de quoi couvrir deux rapports : au-delà, la fenêtre de dates suffit.\nconst liens = [...new Set([...liensActuels, ...anciens])].slice(0, 900);\n\n// Trace de la décision sur le poids du PDF : le journal d'exécution de n8n est\n// tronqué, ce fichier ne l'est pas.\nlet diagnostic = null;\ntry {\n  const v = $('Vérifier la taille du PDF').first();\n  diagnostic = {\n    origine: v.json.origine,\n    tailleMo: v.json.tailleMo,\n    tropLourd: v.json.tropLourd,\n    binairesRecus: Object.fromEntries(Object.entries(v.binary || {}).map(([k, b]) => [k, b.fileSize])),\n    binaireEnvoye: Object.fromEntries(Object.entries(info.binary || {}).map(([k, b]) => [k, b.fileSize])),\n  };\n} catch (e) { diagnostic = { erreur: String(e).slice(0, 200) }; }\n\nconst etat = {\n  dernierRun: new Date().toISOString(),\n  diagnostic,\n  dernierFichier: info.json.nomFichier,\n  nbArticles: articles.length,\n  liens,\n};\n\nconst contenu = JSON.stringify(etat, null, 2);\nlet bin;\ntry {\n  bin = await this.helpers.prepareBinaryData(Buffer.from(contenu, 'utf8'), '.etat.json', 'application/json');\n} catch (e) {\n  bin = { data: Buffer.from(contenu, 'utf8').toString('base64'), mimeType: 'application/json', fileName: '.etat.json', fileExtension: 'json' };\n}\n\n// Le PDF doit rester attaché pour le nœud d'envoi qui suit.\nreturn [{ json: info.json, binary: { ...info.binary, etat: bin } }];\n"
+      },
+      "id": "m-moriser-l-tat",
+      "name": "Mémoriser l’état",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5120,
+        100
+      ],
+      "notes": "Enregistre la date et les liens de ce rapport pour le suivant.",
+      "notesInFlow": false
+    },
+    {
+      "parameters": {
+        "operation": "write",
+        "fileName": "/data/rapports/.etat.json",
+        "dataPropertyName": "etat",
+        "options": {}
+      },
+      "id": "ecrire-etat",
+      "name": "Écrire l’état",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        6000,
+        100
+      ],
+      "onError": "continueRegularOutput",
+      "notes": "Un échec d’écriture ne doit pas empêcher l’envoi du rapport."
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $json.expediteur }}",
+        "toEmail": "={{ $json.destinataire }}",
+        "subject": "={{ $json.sujet }}",
+        "emailFormat": "html",
+        "html": "={{ $json.corpsHtml }}",
+        "options": {
+          "attachments": "data"
+        }
+      },
+      "credentials": {
+        "smtp": {
+          "id": "gnLXkWNIJq0EGBDR",
+          "name": "SMTP account"
+        }
+      },
+      "disabled": true,
+      "id": "email",
+      "name": "Envoyer le rapport",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        6220,
+        100
+      ],
+      "notes": "Identifiant SMTP à créer dans n8n. Le PDF est joint depuis la propriété binaire « data »."
+    }
+  ],
+  "connections": {
+    "Toutes les 3 jours à 8 h": {
+      "main": [
+        [
+          {
+            "node": "Lire l’état précédent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Test manuel": {
+      "main": [
+        [
+          {
+            "node": "Lire l’état précédent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lire l’état précédent": {
+      "main": [
+        [
+          {
+            "node": "Configuration",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Configuration": {
+      "main": [
+        [
+          {
+            "node": "Liste des flux",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Liste des flux": {
+      "main": [
+        [
+          {
+            "node": "Récupérer les flux",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Récupérer les flux": {
+      "main": [
+        [
+          {
+            "node": "Parser le XML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parser le XML": {
+      "main": [
+        [
+          {
+            "node": "Normaliser les articles",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normaliser les articles": {
+      "main": [
+        [
+          {
+            "node": "Préparer enrichissement",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Préparer enrichissement": {
+      "main": [
+        [
+          {
+            "node": "Récupérer les pages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Récupérer les pages": {
+      "main": [
+        [
+          {
+            "node": "Fusionner les métadonnées",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fusionner les métadonnées": {
+      "main": [
+        [
+          {
+            "node": "Préparer les embeddings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Préparer les embeddings": {
+      "main": [
+        [
+          {
+            "node": "Encoder les titres (Ollama)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Encoder les titres (Ollama)": {
+      "main": [
+        [
+          {
+            "node": "Apparier les sujets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apparier les sujets": {
+      "main": [
+        [
+          {
+            "node": "Préparer extraction du corps",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Préparer extraction du corps": {
+      "main": [
+        [
+          {
+            "node": "Récupérer les articles libres",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Récupérer les articles libres": {
+      "main": [
+        [
+          {
+            "node": "Extraire le corps",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extraire le corps": {
+      "main": [
+        [
+          {
+            "node": "Extraire et surligner les chiffres",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extraire et surligner les chiffres": {
+      "main": [
+        [
+          {
+            "node": "Préparer les images",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Préparer les images": {
+      "main": [
+        [
+          {
+            "node": "Récupérer les images",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Récupérer les images": {
+      "main": [
+        [
+          {
+            "node": "Intégrer les images",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Intégrer les images": {
+      "main": [
+        [
+          {
+            "node": "Composer le rapport HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Composer le rapport HTML": {
+      "main": [
+        [
+          {
+            "node": "Convertir en PDF (Gotenberg)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Convertir en PDF (Gotenberg)": {
+      "main": [
+        [
+          {
+            "node": "Compresser le PDF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compresser le PDF": {
+      "main": [
+        [
+          {
+            "node": "Vérifier la taille du PDF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vérifier la taille du PDF": {
+      "main": [
+        [
+          {
+            "node": "PDF trop lourd ?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PDF trop lourd ?": {
+      "main": [
+        [
+          {
+            "node": "Basculer sur la version allégée",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Préparer l’envoi",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Basculer sur la version allégée": {
+      "main": [
+        [
+          {
+            "node": "Convertir en PDF (version allégée)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Convertir en PDF (version allégée)": {
+      "main": [
+        [
+          {
+            "node": "Préparer l’envoi",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Préparer l’envoi": {
+      "main": [
+        [
+          {
+            "node": "Enregistrer le PDF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enregistrer le PDF": {
+      "main": [
+        [
+          {
+            "node": "Mémoriser l’état",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mémoriser l’état": {
+      "main": [
+        [
+          {
+            "node": "Écrire l’état",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Écrire l’état": {
+      "main": [
+        [
+          {
+            "node": "Envoyer le rapport",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "timezone": "Europe/Paris"
+  },
+  "pinData": {},
+  "active": false,
+  "tags": [
+    {
+      "name": "veille"
+    },
+    {
+      "name": "presse"
+    }
+  ],
+  "meta": {
+    "instanceId": "veille-presse"
+  }
+}

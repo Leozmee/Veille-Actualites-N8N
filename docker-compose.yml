@@ -1,0 +1,55 @@
+# Veille presse — n8n + Gotenberg (conversion HTML → PDF)
+#   docker compose up -d      puis  http://localhost:5678
+services:
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:latest
+    container_name: veille-n8n
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    environment:
+      - GENERIC_TIMEZONE=Europe/Paris
+      - TZ=Europe/Paris
+      - N8N_DIAGNOSTICS_ENABLED=false
+      - N8N_RUNNERS_ENABLED=true
+      # Accès en HTTP simple sur localhost : sans ceci le cookie d'auth est rejeté
+      - N8N_SECURE_COOKIE=false
+      # n8n bloque l'accès disque par défaut : on autorise le seul dossier utile
+      - N8N_RESTRICT_FILE_ACCESS_TO=/data/rapports
+      # Ollama tourne nativement sur le Mac (GPU Metal), pas dans un conteneur
+      - OLLAMA_HOST=http://host.docker.internal:11434
+      # Rapports volumineux : on garde les binaires sur disque plutôt qu'en mémoire
+      - N8N_DEFAULT_BINARY_DATA_MODE=filesystem
+      - N8N_PAYLOAD_SIZE_MAX=64
+      # SMTP — à renseigner (ou via l'interface : Credentials ▸ SMTP)
+      # - N8N_EMAIL_MODE=smtp
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - n8n_data:/home/node/.n8n
+      # Les PDF produits atterrissent ici, côté Mac
+      - ./rapports:/data/rapports
+    depends_on:
+      - gotenberg
+      - compresseur
+
+  gotenberg:
+    image: gotenberg/gotenberg:8
+    container_name: veille-gotenberg
+    restart: unless-stopped
+    command:
+      - "gotenberg"
+      - "--chromium-disable-javascript=true"      # le rapport est du HTML statique
+      - "--api-timeout=180s"
+    # Aucun port publié : seul n8n l'appelle, sur http://gotenberg:3000
+
+  compresseur:
+    build: ./compresseur
+    image: veille-compresseur:1
+    container_name: veille-compresseur
+    restart: unless-stopped
+    # Ghostscript derrière une API HTTP. Aucun port publié : seul n8n l'appelle.
+    # Sur un rapport illustré, /printer fait passer 11,5 Mo à ~2,2 Mo.
+
+volumes:
+  n8n_data:

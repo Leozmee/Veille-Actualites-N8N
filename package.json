@@ -1,0 +1,14 @@
+{
+  "name": "veille-presse-n8n",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Veille presse (Le Monde, Le Figaro, Le Parisien, Libération, La Croix) — workflow n8n",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node test-local.mjs"
+  },
+  "devDependencies": {
+    "xml2js": "^0.6.2"
+  }
+}

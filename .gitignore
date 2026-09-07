@@ -1,0 +1,6 @@
+node_modules/
+out/
+rapports/*.pdf
+rapports/.etat.json
+rapports/.journal.log
+.DS_Store
