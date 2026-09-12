@@ -30,7 +30,7 @@ try {
 
 const config = {
   // Destinataire du rapport PDF
-  destinataire: 'leogaallus@gmail.com',   // olivia.gallus@gmail.com retiré pendant les tests
+  destinataire: 'leogaallus@gmail.com, olivia.gallus@gmail.com',
   expediteur: 'leogaallus@gmail.com',
 
   // Fenêtre de collecte : on garde les articles des N derniers jours
