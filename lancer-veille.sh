@@ -80,8 +80,10 @@ arreter_docker_de_force() {
     pgrep -f "Docker.app/Contents/MacOS" > /dev/null 2>&1 || break
     sleep 3
   done
+  # Même raison qu'à l'extinction : on ne force qu'en dernier recours, quand
+  # le démon est de toute façon inutilisable, et on recrée alors les conteneurs.
   pgrep -f "Docker.app/Contents/MacOS" > /dev/null 2>&1 && pkill -f "Docker.app/Contents/MacOS" 2>/dev/null
-  sleep 5
+  sleep 8
 }
 
 if ! docker info > /dev/null 2>&1; then
@@ -108,19 +110,52 @@ fi
 # Le serveur n8n n'est pas nécessaire : un conteneur éphémère suffit, et il
 # évite le conflit de port avec le task broker.
 cd "$PROJET" || exit 1
-if (( DOCKER_RECUPERE )); then
-  docker compose down --remove-orphans >> "$JOURNAL" 2>&1
-  for c in veille-n8n veille-gotenberg veille-compresseur; do docker rm -f "$c" > /dev/null 2>&1; done
-  trace "conteneurs recréés après récupération de Docker"
-fi
-docker compose up -d gotenberg compresseur >> "$JOURNAL" 2>&1
 
-# Les services doivent réellement répondre avant de lancer le workflow.
-for _ in {1..20}; do
-  docker exec veille-gotenberg sh -c 'wget -qO- --timeout=3 http://127.0.0.1:3000/health' > /dev/null 2>&1 && break
-  sleep 3
-done
-docker compose run --rm --entrypoint n8n n8n execute --id "$WORKFLOW_ID" > /tmp/veille-exec.log 2>&1
+# Les conteneurs sont systématiquement repartis de zéro. Un arrêt brutal de
+# Docker (plantage, mise en veille, extinction du Mac) laisse des conteneurs
+# dont la couche de stockage est incohérente : « RWLayer unexpectedly nil ».
+# Les supprimer coûte quelques secondes et évite de perdre le rapport.
+demarrer_services() {
+  docker compose down --remove-orphans > /dev/null 2>&1
+  for c in veille-n8n veille-gotenberg veille-compresseur; do
+    docker rm -f "$c" > /dev/null 2>&1
+  done
+  docker compose up -d gotenberg compresseur >> "$JOURNAL" 2>&1
+}
+
+# Les deux images n'offrent pas le même client HTTP : Gotenberg embarque curl
+# mais pas wget, le compresseur l'inverse. Tester avec un seul des deux fait
+# échouer le contrôle quel que soit l'état réel du service.
+sonder() {                    # $1 = conteneur, $2 = URL
+  docker exec "$1" sh -c "curl -sf --max-time 3 '$2' || wget -qO- --timeout=3 '$2'" > /dev/null 2>&1
+}
+
+services_prets() {
+  for _ in {1..25}; do
+    if sonder veille-gotenberg   http://127.0.0.1:3000/health \
+       && sonder veille-compresseur http://127.0.0.1:3001/health; then
+      return 0
+    fi
+    sleep 3
+  done
+  return 1
+}
+
+demarrer_services
+if ! services_prets; then
+  trace "services indisponibles — seconde tentative après nettoyage complet"
+  demarrer_services
+  if ! services_prets; then
+    trace "ÉCHEC — Gotenberg ou le compresseur ne répond pas"
+    docker compose down > /dev/null 2>&1
+    exit 1
+  fi
+  trace "services démarrés à la seconde tentative"
+fi
+
+# --no-deps : sans cela, « compose run » relance gotenberg et compresseur en
+# parallèle de ceux déjà lancés, d'où la double création de réseau observée.
+docker compose run --rm --no-deps --entrypoint n8n n8n execute --id "$WORKFLOW_ID" > /tmp/veille-exec.log 2>&1
 CODE=$?
 
 if grep -q "Execution was successful" /tmp/veille-exec.log 2>/dev/null; then
@@ -133,8 +168,9 @@ fi
 
 # ── 5. Retour au repos ────────────────────────────────────────────────────
 # Rien ne doit survivre à l'exécution. Trois pièges rencontrés :
-#   · le « quit » gracieux de Docker Desktop n'aboutit pas toujours — il faut
-#     forcer, sinon ~900 Mo restent en mémoire jusqu'au prochain redémarrage ;
+#   · le « quit » AppleScript n'aboutit pas de façon fiable, et le forcer
+#     corrompt les couches de stockage. « docker desktop stop » fait les deux
+#     correctement : arrêt complet et état écrit proprement ;
 #   · les greffons « docker-agent » ne meurent pas avec l'application ;
 #   · conditionner l'extinction au fait d'avoir démarré Docker soi-même est un
 #     piège : une exécution qui échoue à l'éteindre le laisse allumé, et toutes
@@ -146,12 +182,24 @@ AUTRES=$(docker ps -q 2>/dev/null | wc -l | tr -d ' ')
 if [[ "${AUTRES:-0}" -gt 0 ]]; then
   trace "Docker laissé actif — ${AUTRES} conteneur(s) étranger(s) en cours"
 else
-  arreter_docker_de_force
+  # « docker desktop stop » est l'arrêt propre officiel : il éteint la VM en
+  # laissant containerd écrire son état, et ramène réellement à 0 Mo. Le quit
+  # AppleScript, lui, n'aboutit pas toujours, et un « pkill » corrompt les
+  # couches de stockage — trois rapports ont été perdus ainsi (10-12/09).
+  if docker desktop stop > /dev/null 2>&1; then
+    sleep 8
+  else
+    trace "« docker desktop stop » indisponible — repli sur le quit AppleScript"
+    osascript -e 'quit app "Docker"' > /dev/null 2>&1
+    for _ in {1..40}; do
+      pgrep -f "Docker.app/Contents/MacOS" > /dev/null 2>&1 || break
+      sleep 3
+    done
+  fi
   pkill -f "cli-plugins/docker-agent" > /dev/null 2>&1
-  sleep 2
   RESTE=$(ps -Ao rss,comm | grep -i "Docker.app" | awk '{s+=$1} END {printf "%.0f", s/1024}')
   if [[ "${RESTE:-0}" -gt 0 ]]; then
-    trace "ATTENTION — ${RESTE} Mo Docker résiduels malgré l'extinction forcée"
+    trace "Docker encore actif (${RESTE} Mo) — laissé tel quel, le tuer corromprait les conteneurs"
   else
     trace "Docker arrêté (0 Mo)"
   fi
