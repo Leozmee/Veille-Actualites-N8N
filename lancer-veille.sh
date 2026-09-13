@@ -46,6 +46,12 @@ print((datetime.now().astimezone().date()-d).days)
 fi
 
 trace "─── démarrage ───"
+
+# Empêche le Mac de se rendormir pendant l'exécution. Sans cela, une tâche
+# déclenchée au réveil peut être coupée en plein milieu si la machine retombe
+# en veille — le rapport serait alors perdu sans trace d'erreur.
+# Le garde-fou s'efface tout seul à la fin du script.
+caffeinate -dimsu -w $$ > /dev/null 2>&1 &
 DEMARRE_DOCKER=0
 DEMARRE_OLLAMA=0
 DOCKER_RECUPERE=0
