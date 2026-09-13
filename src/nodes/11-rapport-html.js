@@ -4,6 +4,21 @@
 // il décrit les nœuds réellement présents et ne peut donc pas diverger.
 const SCHEMA = /* __SCHEMA__ */ [];
 
+// Les neuf étapes sont réparties en quatre couloirs de lecture.
+// Palette « Nordique » : bleu-gris, sauge, sable, argile. Désaturée et froide,
+// délibérément éloignée de l'ambre, du vert, du bleu et du violet réservés
+// aux types de données chiffrées — aucune confusion possible entre les deux.
+const GROUPES = [
+  { num: '01', titre: 'Collecte', sous: 'Ce que la presse publie', couleur: '#4a6572', etapes: ['Déclenchement', 'Collecte', 'Enrichissement'] },
+  { num: '02', titre: 'Rapprochement', sous: 'Relier les sujets entre eux', couleur: '#7d9b8a', etapes: ['Rapprochement des sujets', 'Développement'] },
+  { num: '03', titre: 'Analyse', sous: 'Extraire et vérifier', couleur: '#c2a878', etapes: ['Analyse et visuels', 'Contrôle qualité'] },
+  { num: '04', titre: 'Fabrication', sous: 'Composer puis diffuser', couleur: '#9b6a62', etapes: ['Mise en page et PDF', 'Diffusion'] },
+];
+const LANES = GROUPES.map((g) => ({
+  ...g,
+  etapes: g.etapes.map((t) => SCHEMA.find((e) => e.titre === t)).filter(Boolean),
+})).filter((g) => g.etapes.length);
+
 const articles = $input.all().map((i) => i.json);
 const cfg = articles[0].cfg;
 const ORDRE = ['Le Monde', 'Le Figaro', 'Le Parisien', 'Libération', 'La Croix'];
@@ -462,22 +477,32 @@ a{color:inherit;text-decoration:none}
 
 /* ── Sections par journal ── */
 .journal{break-before:page;padding:0 10mm}
-.schema{break-before:page;padding:0 10mm}
-.schema-intro{font-size:9.5pt;line-height:1.5;color:#4a505c;margin:0 0 6mm;max-width:150mm}
-.flux{max-width:152mm;margin:0 auto}
-.bloc{border:1px solid #c9cdd6;border-left:3px solid #16181d;border-radius:3px;padding:3mm 4mm;break-inside:avoid;background:#fcfcfd}
-.bloc-tete{font-family:"Helvetica Neue",Arial,sans-serif;font-size:8.4pt;font-weight:800;letter-spacing:.1em;
-           text-transform:uppercase;color:#16181d;margin-bottom:2.5mm;display:flex;align-items:center;gap:3mm}
-.bloc-num{display:inline-block;width:5.5mm;height:5.5mm;line-height:5.5mm;text-align:center;border-radius:50%;
-          background:#16181d;color:#fff;font-size:7.4pt;letter-spacing:0}
-.op{display:flex;align-items:baseline;gap:2.5mm;padding:.9mm 0}
-.op-puce{flex:0 0 auto;width:1.6mm;height:1.6mm;border-radius:50%;background:#b9bec8;transform:translateY(-.4mm)}
-.op-nom{flex:0 0 47mm;font-family:"Helvetica Neue",Arial,sans-serif;font-size:7.6pt;font-weight:700;color:#16181d}
-.op-role{flex:1;font-size:8pt;line-height:1.35;color:#5c6270}
-.fleche{text-align:center;line-height:0;padding:1mm 0}
-.note-branche{margin-top:5mm;padding:3mm 4mm;background:#f6f7f9;border-left:3px solid #4272d6;border-radius:0 3px 3px 0;
-              font-size:8.6pt;line-height:1.5;color:#3d434f;break-inside:avoid}
-.note-branche b{color:#16181d}
+/* Annexe technique : sans condensée, volontairement distincte du serif du
+   rapport, pour signaler qu'on quitte l'actualité. */
+.schema{break-before:page;padding:0 10mm;
+        font-family:'Helvetica Neue Condensed','Avenir Next Condensed','Liberation Sans Narrow','DejaVu Sans Condensed',sans-serif}
+.schema-entete{border-bottom:2.5px solid #16181d;padding-bottom:2.5mm;margin-bottom:4mm;
+               display:flex;align-items:baseline;gap:4mm}
+.schema-entete h2{font-family:inherit;font-size:15pt;font-weight:700;margin:0}
+.schema-n{font-size:7.2pt;color:#6b7280;margin-left:auto}
+.schema-intro{font-size:8pt;line-height:1.5;color:#4a505c;margin:0 0 5mm;max-width:158mm}
+.couloirs{display:flex;gap:3.5mm;align-items:stretch}
+.couloir{flex:1;min-width:0;border-top:3px solid var(--c);padding-top:2.6mm}
+.couloir-tete{display:flex;align-items:center;gap:2mm;margin-bottom:.6mm}
+.couloir-num{font-size:7pt;font-weight:800;color:#fff;background:var(--c);width:7mm;height:4.8mm;
+             line-height:4.8mm;text-align:center;border-radius:1.2mm;flex:0 0 auto}
+.couloir-nom{font-size:9.2pt;font-weight:700}
+.couloir-sous{font-size:6.8pt;color:#8a90a0;margin-bottom:2.5mm}
+.lane-etape{font-size:6.4pt;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--c);
+            border-bottom:1px solid #e7e9ee;padding-bottom:.7mm;margin:2.2mm 0 1.6mm}
+.lane-etape:first-of-type{margin-top:0}
+.op{margin-bottom:1.8mm;break-inside:avoid}
+.op-nom{font-size:7pt;font-weight:700;color:#16181d;line-height:1.25}
+.op-role{font-size:6.6pt;line-height:1.38;color:#5c6270;margin-top:.25mm}
+.schema-notes{margin-top:6mm;display:flex;gap:3.5mm}
+.schema-notes>div{flex:1;background:#f7f8f9;border-left:2px solid #4a6572;border-radius:0 2px 2px 0;
+                  padding:2.5mm 3mm;font-size:6.8pt;line-height:1.45;color:#3d434f}
+.schema-notes b{display:block;color:#16181d;font-size:7.2pt;margin-bottom:1mm}
 .journal-entete{display:flex;align-items:baseline;gap:4mm;border-bottom:2.5px solid;padding-bottom:3mm;margin-bottom:6mm}
 .journal-entete h2{font-family:Georgia,"DejaVu Serif",serif;font-size:23pt;font-weight:400;margin:0}
 .journal-entete .n{font-family:"Helvetica Neue",Arial,sans-serif;font-size:8.5pt;color:#6b7280;margin-left:auto}
@@ -640,35 +665,39 @@ ${journaux.map((j) => `
 
 ${SCHEMA.length ? `
 <section class="schema">
-  <div class="essentiel-entete">
+  <div class="schema-entete">
     <h2>Comment ce rapport est fabriqué</h2>
-    <span class="n">${SCHEMA.reduce((n, e) => n + e.noeuds.length, 0)} opérations enchaînées</span>
+    <span class="schema-n">${SCHEMA.reduce((n, e) => n + e.noeuds.length, 0)} opérations enchaînées · ~90 secondes</span>
   </div>
-  <p class="schema-intro">Chaque exécution parcourt ce circuit sans intervention. Une étape en
-  échec n’interrompt pas le rapport : chacune dispose d’un repli.</p>
+  <p class="schema-intro">Chaque exécution parcourt ces quatre phases sans intervention. Une étape en échec
+  n’interrompt pas le rapport : chacune dispose d’un repli.</p>
 
-  <div class="flux">
-    ${SCHEMA.map((etape, i) => `
-      <div class="bloc">
-        <div class="bloc-tete"><span class="bloc-num">${String(i + 1).padStart(2, '0')}</span>${esc(etape.titre)}</div>
-        ${etape.noeuds.map((n) => `
-          <div class="op">
-            <span class="op-puce"></span>
-            <span class="op-nom">${esc(n.nom)}</span>
-            <span class="op-role">${esc(n.role)}</span>
-          </div>`).join('')}
-      </div>
-      ${i < SCHEMA.length - 1 ? `<div class="fleche"><svg width="14" height="22" viewBox="0 0 14 22"><line x1="7" y1="0" x2="7" y2="15" stroke="#b9bec8" stroke-width="1.6"/><polygon points="7,22 3,14 11,14" fill="#b9bec8"/></svg></div>` : ''}`).join('')}
+  <div class="couloirs">
+    ${LANES.map((lane) => `
+      <div class="couloir" style="--c:${lane.couleur}">
+        <div class="couloir-tete">
+          <span class="couloir-num">${lane.num}</span>
+          <span class="couloir-nom">${esc(lane.titre)}</span>
+        </div>
+        <div class="couloir-sous">${esc(lane.sous)}</div>
+        ${lane.etapes.map((etape) => `
+          <div class="lane-etape">${esc(etape.titre)}</div>
+          ${etape.noeuds.map((n) => `
+            <div class="op">
+              <div class="op-nom">${esc(n.nom)}</div>
+              <div class="op-role">${esc(n.role)}</div>
+            </div>`).join('')}`).join('')}
+      </div>`).join('')}
   </div>
 
-  <div class="note-branche">
-    <b>Une bifurcation</b> — après compression, le poids du PDF est mesuré. Sous 20 Mo il part tel quel ;
-    au-dessus, le rapport est régénéré sans images, le texte seul pesant environ 200 Ko.
-  </div>
-  <div class="note-branche">
-    <b>Deux modèles locaux</b> — <i>bge-m3</i> rapproche les sujets, <i>gemma2:9b</i> juge la qualité des
-    paragraphes, <i>llama3.1:8b</i> rédige les thèmes. Tout tourne sur la machine, sans clé ni abonnement.
-    Ollama éteint, le rapport se produit quand même par des règles déterministes.
+  <div class="schema-notes">
+    <div><b>Bifurcation</b> Après compression, le poids du PDF est mesuré. Sous 20 Mo il part tel quel ;
+      au-dessus, le rapport est régénéré sans images — le texte seul pèse environ 200 Ko.</div>
+    <div><b>Trois modèles locaux</b> bge-m3 rapproche les sujets, gemma2:9b juge la qualité des paragraphes,
+      llama3.1:8b rédige les thèmes. Aucune clé, aucun abonnement, rien ne sort de la machine.
+      Ollama éteint, le rapport se produit quand même par des règles déterministes.</div>
+    <div><b>Zéro au repos</b> Docker et Ollama sont démarrés pour l’exécution puis arrêtés. Entre deux
+      rapports, aucun service ne tourne.</div>
   </div>
 </section>` : ''}
 
@@ -690,7 +719,12 @@ const htmlLeger = html
   .replace(/<div class="carte-img">[\s\S]*?<\/div>/g, '')
   .replace(/\.carte-txt\{flex:1;min-width:0\}/, '.carte-txt{flex:1;min-width:0}\n.carte{gap:0}');
 
-const stamp = new Date().toISOString().slice(0, 10);
+const maintenantLocal = new Date();
+const stamp = maintenantLocal.toISOString().slice(0, 10);
+// Deux noms distincts : la pièce jointe garde un nom propre à la date, tandis
+// que l'archive porte aussi l'heure — deux rapports produits le même jour ne
+// doivent jamais s'écraser dans rapports/.
+const horodatage = `${stamp}-${String(maintenantLocal.getHours()).padStart(2, '0')}h${String(maintenantLocal.getMinutes()).padStart(2, '0')}`;
 const enBinaire = async (contenu, nom, type) => {
   try { return await this.helpers.prepareBinaryData(Buffer.from(contenu, 'utf8'), nom, type); }
   catch (e) {
@@ -701,6 +735,7 @@ const enBinaire = async (contenu, nom, type) => {
 return [{
   json: {
     nomFichier: `revue-de-presse-${stamp}.pdf`,
+    nomArchive: `revue-de-presse-${horodatage}.pdf`,
     sujet: `Revue de presse — les actualités ${periode}`,
     destinataire: cfg.destinataire,
     expediteur: cfg.expediteur,

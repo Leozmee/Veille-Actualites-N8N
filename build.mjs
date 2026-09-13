@@ -322,13 +322,14 @@ const nodes = [
   {
     parameters: {
       operation: 'write',
-      fileName: '=/data/rapports/{{ $json.nomFichier }}',
+      // nomArchive porte la date ET l'heure : aucun rapport n'en écrase un autre.
+      fileName: '=/data/rapports/{{ $json.nomArchive || $json.nomFichier }}',
       dataPropertyName: 'data',
       options: {},
     },
     id: 'archive', name: 'Enregistrer le PDF',
     type: 'n8n-nodes-base.readWriteFile', typeVersion: 1, position: [6220, 260],
-    notes: 'Archive le rapport dans ./rapports du projet (monté sur /data/rapports dans le conteneur).',
+    notes: 'Archive dans ./rapports, horodaté à la minute : deux rapports du même jour coexistent.',
   },
 
   code('Mémoriser l’état', '15-memoriser-etat.js', [5120, 100],

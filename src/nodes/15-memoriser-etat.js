@@ -30,7 +30,7 @@ try {
 const etat = {
   dernierRun: new Date().toISOString(),
   diagnostic,
-  dernierFichier: info.json.nomFichier,
+  dernierFichier: info.json.nomArchive || info.json.nomFichier,
   nbArticles: articles.length,
   liens,
 };
