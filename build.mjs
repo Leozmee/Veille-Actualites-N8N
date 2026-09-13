@@ -420,6 +420,72 @@ const workflow = {
   meta: { instanceId: 'veille-presse' },
 };
 
+// ─── Schéma du workflow, injecté dans le rapport ───────────────────────────
+// Construit à partir des nœuds réellement définis ci-dessus : le schéma
+// imprimé en fin de PDF ne peut donc pas diverger du workflow exécuté.
+const ROLES = {
+  'Toutes les 3 jours à 8 h': 'Déclencheur interne, inactif : c’est launchd qui commande.',
+  'Test manuel': 'Permet de produire un rapport à la demande.',
+  'Lire l’état précédent': 'Date du dernier envoi et liens déjà expédiés.',
+  'Configuration': 'Destinataires, fenêtre de collecte, seuils, plafonds.',
+  'Liste des flux': '21 flux RSS : 9 quotidiens, 12 sources libres.',
+  'Récupérer les flux': 'Téléchargement, 3 en parallèle, tolérant aux pannes.',
+  'Parser le XML': 'Conversion en données exploitables.',
+  'Normaliser les articles': 'Journal déduit du domaine, datation, dédoublonnage, fenêtre de 3 jours.',
+  'Préparer enrichissement': 'Repère les articles sans résumé — Le Parisien n’en fournit aucun.',
+  'Récupérer les pages': 'Lecture des balises <meta> publiques.',
+  'Fusionner les métadonnées': 'Complète résumé, image et date exacte.',
+  'Préparer les embeddings': 'Rassemble les titres à comparer.',
+  'Encoder les titres (Ollama)': 'bge-m3, local : transforme chaque titre en vecteur.',
+  'Apparier les sujets': 'Sémantique + noms propres partagés : 8 % d’appariement en lexical seul, ~55 % ainsi.',
+  'Préparer extraction du corps': 'Liste les articles libres à lire.',
+  'Récupérer les articles libres': 'France Info, France 24, RFI, Euronews — texte intégral accessible.',
+  'Extraire le corps': 'Paragraphes de l’article, habillage éditorial écarté.',
+  'Extraire et surligner les chiffres': 'Pourcentages, montants, volumes, périodes.',
+  'Préparer les images': 'Visuels à rapatrier, en version réduite.',
+  'Récupérer les images': 'Téléchargement des visuels.',
+  'Intégrer les images': 'Conversion en base64 : aucune requête réseau à l’impression.',
+  'Préparer le contrôle qualité': 'Détecte coupures, longueurs aberrantes, résumés recopiés.',
+  'Juger la qualité (Ollama)': 'gemma2:9b, local : écarte parasites et phrases sans information.',
+  'Appliquer le contrôle qualité': 'Retire le rejeté ; llama3.1:8b rédige les thèmes, vérifiés sur le titre.',
+  'Composer le rapport HTML': 'Mise en page A4, plus une variante sans images.',
+  'Convertir en PDF (Gotenberg)': 'Chromium sans interface, en conteneur.',
+  'Convertir en PDF (PDFShift — secours)': 'Variante sans Docker, inactive.',
+  'Compresser le PDF': 'Ghostscript 300 dpi : ~22 Mo ramenés à ~2 Mo.',
+  'Vérifier la taille du PDF': 'Au-delà de 20 Mo, bascule sur la version sans images.',
+  'PDF trop lourd ?': 'Aiguillage vers le repli.',
+  'Basculer sur la version allégée': 'Reprend le HTML sans visuels.',
+  'Convertir en PDF (version allégée)': 'Second passage, texte seul.',
+  'Préparer l’envoi': 'Nomme le PDF et compose le corps du message.',
+  'Enregistrer le PDF': 'Archivage dans rapports/.',
+  'Mémoriser l’état': 'Note la date et les liens de ce rapport.',
+  'Écrire l’état': 'Sauvegarde pour l’exécution suivante.',
+  'Envoyer le rapport': 'Expédition par SMTP, PDF en pièce jointe.',
+};
+const ETAPES = [
+  ['Déclenchement', ['Toutes les 3 jours à 8 h', 'Test manuel', 'Lire l’état précédent', 'Configuration']],
+  ['Collecte', ['Liste des flux', 'Récupérer les flux', 'Parser le XML', 'Normaliser les articles']],
+  ['Enrichissement', ['Préparer enrichissement', 'Récupérer les pages', 'Fusionner les métadonnées']],
+  ['Rapprochement des sujets', ['Préparer les embeddings', 'Encoder les titres (Ollama)', 'Apparier les sujets']],
+  ['Développement', ['Préparer extraction du corps', 'Récupérer les articles libres', 'Extraire le corps']],
+  ['Analyse et visuels', ['Extraire et surligner les chiffres', 'Préparer les images', 'Récupérer les images', 'Intégrer les images']],
+  ['Contrôle qualité', ['Préparer le contrôle qualité', 'Juger la qualité (Ollama)', 'Appliquer le contrôle qualité']],
+  ['Mise en page et PDF', ['Composer le rapport HTML', 'Convertir en PDF (Gotenberg)', 'Compresser le PDF', 'Vérifier la taille du PDF', 'PDF trop lourd ?', 'Basculer sur la version allégée', 'Convertir en PDF (version allégée)']],
+  ['Diffusion', ['Préparer l’envoi', 'Enregistrer le PDF', 'Mémoriser l’état', 'Écrire l’état', 'Envoyer le rapport']],
+];
+const presents = new Set(nodes.filter((n) => !n.disabled).map((n) => n.name));
+const schema = ETAPES.map(([titre, noms]) => ({
+  titre,
+  noeuds: noms.filter((n) => presents.has(n)).map((n) => ({ nom: n, role: ROLES[n] || '' })),
+})).filter((e) => e.noeuds.length);
+
+const manquants = [...presents].filter((n) => !ETAPES.some(([, l]) => l.includes(n)));
+if (manquants.length) console.warn('⚠ nœuds absents du schéma :', manquants.join(', '));
+
+const composeur = nodes.find((n) => n.name === 'Composer le rapport HTML');
+composeur.parameters.jsCode = composeur.parameters.jsCode.replace(
+  '/* __SCHEMA__ */ []', JSON.stringify(schema));
+
 const sortie = path.join(ICI, 'workflow-veille-presse.json');
 fs.writeFileSync(sortie, JSON.stringify(workflow, null, 2));
 const noms = nodes.map((n) => n.name);

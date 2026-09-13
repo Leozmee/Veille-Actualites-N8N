@@ -1,5 +1,9 @@
 // ─── Composition du rapport HTML (converti en PDF à l'étape suivante) ──────
 
+// Schéma du workflow, injecté à la construction du JSON par build.mjs :
+// il décrit les nœuds réellement présents et ne peut donc pas diverger.
+const SCHEMA = /* __SCHEMA__ */ [];
+
 const articles = $input.all().map((i) => i.json);
 const cfg = articles[0].cfg;
 const ORDRE = ['Le Monde', 'Le Figaro', 'Le Parisien', 'Libération', 'La Croix'];
@@ -458,6 +462,20 @@ a{color:inherit;text-decoration:none}
 
 /* ── Sections par journal ── */
 .journal{break-before:page;padding:0 10mm}
+.schema{break-before:page;padding:0 10mm}
+.schema-intro{font-size:9.5pt;line-height:1.5;color:#4a505c;margin:0 0 7mm;max-width:150mm}
+.etape{display:flex;gap:5mm;padding-bottom:5mm;margin-bottom:5mm;border-bottom:1px solid #e7e9ee;break-inside:avoid}
+.etape:last-child{border-bottom:0}
+.etape-tete{flex:0 0 42mm}
+.etape-num{display:inline-block;font-family:"Helvetica Neue",Arial,sans-serif;font-size:9pt;font-weight:800;
+           color:#fff;background:#16181d;width:6mm;height:6mm;line-height:6mm;text-align:center;border-radius:50%}
+.etape-nom{display:block;margin-top:2mm;font-family:Georgia,"DejaVu Serif",serif;font-size:11.5pt;
+           font-weight:700;line-height:1.25}
+.etape-noeuds{flex:1;min-width:0}
+.noeud{display:flex;gap:3mm;padding:1.6mm 0;border-bottom:1px dotted #e7e9ee;align-items:baseline}
+.noeud:last-child{border-bottom:0}
+.noeud-nom{flex:0 0 52mm;font-family:"Helvetica Neue",Arial,sans-serif;font-size:8pt;font-weight:700;color:#16181d}
+.noeud-role{flex:1;font-size:8.4pt;line-height:1.4;color:#4a505c}
 .journal-entete{display:flex;align-items:baseline;gap:4mm;border-bottom:2.5px solid;padding-bottom:3mm;margin-bottom:6mm}
 .journal-entete h2{font-family:Georgia,"DejaVu Serif",serif;font-size:23pt;font-weight:400;margin:0}
 .journal-entete .n{font-family:"Helvetica Neue",Arial,sans-serif;font-size:8.5pt;color:#6b7280;margin-left:auto}
@@ -617,6 +635,30 @@ ${journaux.map((j) => `
   ${j.une.length ? `<div class="sous-titre">Les articles mis en avant</div>${j.une.map(carteUne).join('')}` : ''}
   ${j.breves.length ? `<div class="sous-titre">Tous les autres articles du journal — ${j.breves.length} sujets</div><ul class="breves">${j.breves.map(ligneBreve).join('')}</ul>` : ''}
 </section>`).join('')}
+
+${SCHEMA.length ? `
+<section class="schema">
+  <div class="essentiel-entete">
+    <h2>Comment ce rapport est fabriqué</h2>
+    <span class="n">${SCHEMA.reduce((n, e) => n + e.noeuds.length, 0)} étapes automatisées</span>
+  </div>
+  <p class="schema-intro">Chaque exécution enchaîne les opérations ci-dessous sans intervention.
+  Une étape en échec n'interrompt pas le rapport : chacune dispose d'un repli.</p>
+  ${SCHEMA.map((etape, i) => `
+    <div class="etape">
+      <div class="etape-tete">
+        <span class="etape-num">${String(i + 1).padStart(2, '0')}</span>
+        <span class="etape-nom">${esc(etape.titre)}</span>
+      </div>
+      <div class="etape-noeuds">
+        ${etape.noeuds.map((n) => `
+          <div class="noeud">
+            <span class="noeud-nom">${esc(n.nom)}</span>
+            <span class="noeud-role">${esc(n.role)}</span>
+          </div>`).join('')}
+      </div>
+    </div>`).join('')}
+</section>` : ''}
 
 </body></html>`;
 
