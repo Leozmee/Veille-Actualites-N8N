@@ -477,6 +477,13 @@ a{color:inherit;text-decoration:none}
 
 /* ── Sections par journal ── */
 .journal{break-before:page;padding:0 10mm}
+.ouverture-journaux{break-before:page;padding:0 10mm}
+.ouverture-intro{font-size:10pt;line-height:1.55;color:#4a505c;margin:0 0 7mm;max-width:150mm}
+.ouverture-liste{border-top:1px solid #dfe2e8}
+.ouverture-item{display:flex;align-items:baseline;gap:4mm;padding:3mm 0;border-bottom:1px solid #eef0f4}
+.ouverture-pastille{width:3mm;height:3mm;border-radius:50%;flex:0 0 auto;transform:translateY(-.3mm)}
+.ouverture-nom{font-family:Georgia,"DejaVu Serif",serif;font-size:13pt;font-weight:700;flex:0 0 46mm}
+.ouverture-compte{font-family:"Helvetica Neue",Arial,sans-serif;font-size:8.4pt;color:#6b7280}
 /* Annexe technique : sans condensée, volontairement distincte du serif du
    rapport, pour signaler qu'on quitte l'actualité. */
 .schema{break-before:page;padding:0 10mm;
@@ -653,6 +660,24 @@ ${reste.length ? `
   ${reste.map(carteEssentiel).join('')}
 </section>` : ''}
 
+${journaux.length ? `
+<section class="ouverture-journaux">
+  <div class="essentiel-entete">
+    <h2>Par journal</h2>
+    <span class="n">${journaux.length} titres · ${journaux.reduce((n, j) => n + j.total, 0)} articles</span>
+  </div>
+  <p class="ouverture-intro">L’intégralité de la collecte, titre par titre : d’abord les articles mis en
+  avant, puis tous les autres sujets du journal.</p>
+  <div class="ouverture-liste">
+    ${journaux.map((j) => `
+      <div class="ouverture-item">
+        <span class="ouverture-pastille" style="background:${j.couleur}"></span>
+        <span class="ouverture-nom">${esc(j.source)}</span>
+        <span class="ouverture-compte">${j.total} article${j.total > 1 ? 's' : ''}${j.dansEssentiel ? ` · ${j.dansEssentiel} déjà traités plus haut` : ''}</span>
+      </div>`).join('')}
+  </div>
+</section>` : ''}
+
 ${journaux.map((j) => `
 <section class="journal">
   <div class="journal-entete" style="border-color:${j.couleur}">
@@ -719,12 +744,19 @@ const htmlLeger = html
   .replace(/<div class="carte-img">[\s\S]*?<\/div>/g, '')
   .replace(/\.carte-txt\{flex:1;min-width:0\}/, '.carte-txt{flex:1;min-width:0}\n.carte{gap:0}');
 
-const maintenantLocal = new Date();
-const stamp = maintenantLocal.toISOString().slice(0, 10);
+// Le conteneur horodate en UTC malgré le fuseau déclaré : un rapport produit
+// à 11 h 21 s'archivait en « 09h21 », et un rapport d'après minuit porterait
+// même la date de la veille. On force donc le fuseau de Paris.
+const PARIS = 'Europe/Paris';
+const partiesDate = new Intl.DateTimeFormat('fr-CA', {
+  timeZone: PARIS, year: 'numeric', month: '2-digit', day: '2-digit',
+  hour: '2-digit', minute: '2-digit', hour12: false,
+}).formatToParts(new Date()).reduce((o, p) => (o[p.type] = p.value, o), {});
+const stamp = `${partiesDate.year}-${partiesDate.month}-${partiesDate.day}`;
 // Deux noms distincts : la pièce jointe garde un nom propre à la date, tandis
 // que l'archive porte aussi l'heure — deux rapports produits le même jour ne
 // doivent jamais s'écraser dans rapports/.
-const horodatage = `${stamp}-${String(maintenantLocal.getHours()).padStart(2, '0')}h${String(maintenantLocal.getMinutes()).padStart(2, '0')}`;
+const horodatage = `${stamp}-${partiesDate.hour}h${partiesDate.minute}`;
 const enBinaire = async (contenu, nom, type) => {
   try { return await this.helpers.prepareBinaryData(Buffer.from(contenu, 'utf8'), nom, type); }
   catch (e) {
@@ -742,6 +774,11 @@ return [{
     periode,
     nbArticles: articles.length,
     nbSujetsCommuns: sujets.length,
+    // Sentinelle de non-régression : une photo qui disparaît ne fait pas échouer
+    // le rapport, elle le rend seulement plus pauvre. Ce compteur, relayé dans
+    // l'état, est le seul endroit où la perte se voit.
+    cartesAvecImage: journaux.reduce((n, j) => n + j.une.filter((a) => a.image).length, 0),
+    cartesTotal: journaux.reduce((n, j) => n + j.une.length, 0),
     maxPdfMo: cfg.maxPdfMo,
     repartition: journaux.map((j) => ({ source: j.source, total: j.total, une: j.une.length })),
     chiffresCles: chiffresCles.map((c) => ({ texte: c.texte, type: c.type, source: c.article.source })),

@@ -13,7 +13,7 @@ const src = (f) => fs.readFileSync(path.join(ICI, 'src', 'nodes', f), 'utf8');
 // pour que le rattachement survive aux réimports du workflow.
 // Interrupteur d'envoi : tant qu'il est à false, le workflow produit et archive
 // le rapport sans expédier de mail. À passer à true une fois le rapport validé.
-const ENVOI_ACTIF = true;
+const ENVOI_ACTIF = false;
 
 // Moteur de conversion PDF. Un seul est câblé à la fois : dans n8n, un nœud
 // désactivé n'est pas neutre, il transmet son entrée à sa sortie — le nœud de

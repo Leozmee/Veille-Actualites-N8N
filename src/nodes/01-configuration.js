@@ -44,7 +44,7 @@ const config = {
   // développé remonte dans « L'essentiel » même s'il n'est pas en carte, donc
   // restreindre ce vivier appauvrit directement le rapport.
   maxCandidatsParSource: 18,
-  maxEnrichissements: 60,     // nb max de pages téléchargées pour compléter les résumés
+  maxEnrichissements: 90,     // pages visitées au maximum (résumé ou image manquants)
   maxArticlesLibres: 90,     // plafond par source libre (France Info, France 24, RFI, Euronews)
 
   // Blocs « Développement » : texte tiré des sources libres, rattaché aux unes

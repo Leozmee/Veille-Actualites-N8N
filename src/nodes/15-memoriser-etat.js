@@ -19,6 +19,9 @@ try {
   const v = $('Vérifier la taille du PDF').first();
   diagnostic = {
     origine: v.json.origine,
+    cartes: { avecImage: v.json.cartesAvecImage, total: v.json.cartesTotal },
+    images: (() => { try { const a = $('Intégrer les images').first().json;
+      return { integrees: a.imagesIntegrees, retirees: a.imagesRetirees }; } catch (e) { return null; } })(),
     qualite: (() => { try { return $('Appliquer le contrôle qualité').first().json.controleQualite; } catch (e) { return null; } })(),
     tailleMo: v.json.tailleMo,
     tropLourd: v.json.tropLourd,

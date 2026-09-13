@@ -16,9 +16,32 @@ const reduireImage = (url) => {
   return u;
 };
 
+// Priorité aux articles RÉELLEMENT illustrés dans le rapport. Le plafond
+// s'appliquait jusqu'ici à la simple liste chronologique : les images partaient
+// aux articles les plus récents, qui finissent le plus souvent en brèves — donc
+// sans visuel — et les cartes se retrouvaient sans rien. On reproduit ici la
+// sélection du nœud de composition : sujets développés, puis premières cartes
+// de chaque journal.
+const agenda = articles.filter((a) => a.role !== 'libre');
+const parJournal = new Map();
+for (const a of agenda) {
+  if (!parJournal.has(a.source)) parJournal.set(a.source, []);
+  parJournal.get(a.source).push(a);
+}
+const affiches = new Set();
+for (const a of agenda) if (a.developpement?.paragraphes?.length || a.developpement) affiches.add(a.lien);
+for (const liste of parJournal.values()) {
+  liste.sort((x, y) => new Date(y.date) - new Date(x.date));
+  let une = liste.filter((x) => x.rubrique === 'une').slice(0, cfg.maxUneParSource);
+  if (une.length === 0) une = liste.slice(0, cfg.maxUneParSource);
+  une.forEach((x) => affiches.add(x.lien));
+}
+
+const ordonnes = [...agenda].sort((x, y) => (affiches.has(y.lien) ? 1 : 0) - (affiches.has(x.lien) ? 1 : 0));
+
 const vues = new Set();
 const liste = [];
-for (const a of articles) {
+for (const a of ordonnes) {
   if (!a.image) continue;
   const u = reduireImage(a.image);
   if (!/^https?:\/\//i.test(u) || vues.has(u)) continue;

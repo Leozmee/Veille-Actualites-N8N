@@ -189,7 +189,14 @@ return retenus.map((a, idx) => ({
   json: {
     ...a,
     id: idx,
-    besoinEnrichissement: a.role !== 'libre' && (!a.resume || a.resume.length < 40),
+    // On visite aussi la page d'un article SANS IMAGE, et plus seulement sans
+    // résumé : un article du Figaro ou de La Croix absent du flux en images
+    // n'était jamais visité, alors que sa page porte une balise og:image.
+    // Inutile en revanche d'insister sur Le Monde (HTTP 402) et Libération
+    // (HTTP 403), qui refusent l'accès automatisé.
+    besoinEnrichissement: a.role !== 'libre'
+      && !/lemonde\.fr|liberation\.fr/.test(a.lien)
+      && (!a.resume || a.resume.length < 40 || !a.image),
     cfg,
     diag: idx === 0 ? diag : undefined,
   },
