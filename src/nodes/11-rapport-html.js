@@ -309,6 +309,8 @@ const blocDeveloppement = (a) => {
 
 // Un même événement vu par plusieurs rédactions : on juxtapose leurs titres et
 // leurs chapôs tels quels. Ce sont leurs angles, dans leurs mots, attribuables.
+// Réservé aux temps forts : dans « L'essentiel », format compact, ce bloc
+// alourdissait la lecture sans être attendu.
 const blocAngles = (a) => {
   if (!a.angles?.length) return '';
   return `
@@ -358,7 +360,6 @@ const carteEssentiel = (a) => `
       ${a.resumeHtml ? `<p class="carte-resume">${a.resumeHtml}</p>` : ''}
       ${a.chiffres && a.chiffres.length ? `<div class="puces">${puces(a)}</div>` : ''}
       ${blocDeveloppement(a)}
-      ${blocAngles(a)}
     </div>
   </article>`;
 
