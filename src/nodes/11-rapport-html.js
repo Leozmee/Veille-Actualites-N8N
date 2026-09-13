@@ -460,8 +460,13 @@ a{color:inherit;text-decoration:none}
 .bloc-chiffre .j{font-family:"Helvetica Neue",Arial,sans-serif;font-size:7.2pt;text-transform:uppercase;
                  letter-spacing:.08em;color:#7a8090;margin-top:2mm}
 
+/* Les accroches et le sommaire tenaient à cheval sur deux pages : la liste
+   s'ouvrait en bas de la couverture et se poursuivait après le bandeau de
+   pied, ce qui coupait l'énumération en deux. On les bascule en bloc sur la
+   page suivante. */
+.suite-couverture{break-before:page}
 .accroches{list-style:none;padding:0;margin:0 0 8mm;counter-reset:none}
-.accroches li{display:flex;gap:4mm;align-items:baseline;padding:2.5mm 0;border-bottom:1px solid #eef0f4}
+.accroches li{display:flex;gap:4mm;align-items:baseline;padding:2.5mm 0;border-bottom:1px solid #eef0f4;break-inside:avoid}
 .accroches li:last-child{border-bottom:0}
 .acc-num{font-family:"Helvetica Neue",Arial,sans-serif;font-size:12pt;font-weight:800;color:#c2c7d0;
          flex:0 0 9mm;line-height:1}
@@ -610,6 +615,7 @@ a{color:inherit;text-decoration:none}
         </div>`).join('')}
     </div>` : ''}
 
+    <div class="suite-couverture">
     ${tempsForts.length ? `
     <h3 class="section-titre">Les ${tempsForts.length} temps forts du jour</h3>
     <ol class="accroches">
@@ -640,6 +646,7 @@ a{color:inherit;text-decoration:none}
         <b>Par journal</b>
         <span>${journaux.length} sections : les articles mis en avant, puis l’ensemble des brèves</span>
       </div>
+    </div>
     </div>
 
   </div>
