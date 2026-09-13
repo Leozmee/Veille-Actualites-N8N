@@ -463,19 +463,21 @@ a{color:inherit;text-decoration:none}
 /* ── Sections par journal ── */
 .journal{break-before:page;padding:0 10mm}
 .schema{break-before:page;padding:0 10mm}
-.schema-intro{font-size:9.5pt;line-height:1.5;color:#4a505c;margin:0 0 7mm;max-width:150mm}
-.etape{display:flex;gap:5mm;padding-bottom:5mm;margin-bottom:5mm;border-bottom:1px solid #e7e9ee;break-inside:avoid}
-.etape:last-child{border-bottom:0}
-.etape-tete{flex:0 0 42mm}
-.etape-num{display:inline-block;font-family:"Helvetica Neue",Arial,sans-serif;font-size:9pt;font-weight:800;
-           color:#fff;background:#16181d;width:6mm;height:6mm;line-height:6mm;text-align:center;border-radius:50%}
-.etape-nom{display:block;margin-top:2mm;font-family:Georgia,"DejaVu Serif",serif;font-size:11.5pt;
-           font-weight:700;line-height:1.25}
-.etape-noeuds{flex:1;min-width:0}
-.noeud{display:flex;gap:3mm;padding:1.6mm 0;border-bottom:1px dotted #e7e9ee;align-items:baseline}
-.noeud:last-child{border-bottom:0}
-.noeud-nom{flex:0 0 52mm;font-family:"Helvetica Neue",Arial,sans-serif;font-size:8pt;font-weight:700;color:#16181d}
-.noeud-role{flex:1;font-size:8.4pt;line-height:1.4;color:#4a505c}
+.schema-intro{font-size:9.5pt;line-height:1.5;color:#4a505c;margin:0 0 6mm;max-width:150mm}
+.flux{max-width:152mm;margin:0 auto}
+.bloc{border:1px solid #c9cdd6;border-left:3px solid #16181d;border-radius:3px;padding:3mm 4mm;break-inside:avoid;background:#fcfcfd}
+.bloc-tete{font-family:"Helvetica Neue",Arial,sans-serif;font-size:8.4pt;font-weight:800;letter-spacing:.1em;
+           text-transform:uppercase;color:#16181d;margin-bottom:2.5mm;display:flex;align-items:center;gap:3mm}
+.bloc-num{display:inline-block;width:5.5mm;height:5.5mm;line-height:5.5mm;text-align:center;border-radius:50%;
+          background:#16181d;color:#fff;font-size:7.4pt;letter-spacing:0}
+.op{display:flex;align-items:baseline;gap:2.5mm;padding:.9mm 0}
+.op-puce{flex:0 0 auto;width:1.6mm;height:1.6mm;border-radius:50%;background:#b9bec8;transform:translateY(-.4mm)}
+.op-nom{flex:0 0 47mm;font-family:"Helvetica Neue",Arial,sans-serif;font-size:7.6pt;font-weight:700;color:#16181d}
+.op-role{flex:1;font-size:8pt;line-height:1.35;color:#5c6270}
+.fleche{text-align:center;line-height:0;padding:1mm 0}
+.note-branche{margin-top:5mm;padding:3mm 4mm;background:#f6f7f9;border-left:3px solid #4272d6;border-radius:0 3px 3px 0;
+              font-size:8.6pt;line-height:1.5;color:#3d434f;break-inside:avoid}
+.note-branche b{color:#16181d}
 .journal-entete{display:flex;align-items:baseline;gap:4mm;border-bottom:2.5px solid;padding-bottom:3mm;margin-bottom:6mm}
 .journal-entete h2{font-family:Georgia,"DejaVu Serif",serif;font-size:23pt;font-weight:400;margin:0}
 .journal-entete .n{font-family:"Helvetica Neue",Arial,sans-serif;font-size:8.5pt;color:#6b7280;margin-left:auto}
@@ -640,24 +642,34 @@ ${SCHEMA.length ? `
 <section class="schema">
   <div class="essentiel-entete">
     <h2>Comment ce rapport est fabriqué</h2>
-    <span class="n">${SCHEMA.reduce((n, e) => n + e.noeuds.length, 0)} étapes automatisées</span>
+    <span class="n">${SCHEMA.reduce((n, e) => n + e.noeuds.length, 0)} opérations enchaînées</span>
   </div>
-  <p class="schema-intro">Chaque exécution enchaîne les opérations ci-dessous sans intervention.
-  Une étape en échec n'interrompt pas le rapport : chacune dispose d'un repli.</p>
-  ${SCHEMA.map((etape, i) => `
-    <div class="etape">
-      <div class="etape-tete">
-        <span class="etape-num">${String(i + 1).padStart(2, '0')}</span>
-        <span class="etape-nom">${esc(etape.titre)}</span>
-      </div>
-      <div class="etape-noeuds">
+  <p class="schema-intro">Chaque exécution parcourt ce circuit sans intervention. Une étape en
+  échec n’interrompt pas le rapport : chacune dispose d’un repli.</p>
+
+  <div class="flux">
+    ${SCHEMA.map((etape, i) => `
+      <div class="bloc">
+        <div class="bloc-tete"><span class="bloc-num">${String(i + 1).padStart(2, '0')}</span>${esc(etape.titre)}</div>
         ${etape.noeuds.map((n) => `
-          <div class="noeud">
-            <span class="noeud-nom">${esc(n.nom)}</span>
-            <span class="noeud-role">${esc(n.role)}</span>
+          <div class="op">
+            <span class="op-puce"></span>
+            <span class="op-nom">${esc(n.nom)}</span>
+            <span class="op-role">${esc(n.role)}</span>
           </div>`).join('')}
       </div>
-    </div>`).join('')}
+      ${i < SCHEMA.length - 1 ? `<div class="fleche"><svg width="14" height="22" viewBox="0 0 14 22"><line x1="7" y1="0" x2="7" y2="15" stroke="#b9bec8" stroke-width="1.6"/><polygon points="7,22 3,14 11,14" fill="#b9bec8"/></svg></div>` : ''}`).join('')}
+  </div>
+
+  <div class="note-branche">
+    <b>Une bifurcation</b> — après compression, le poids du PDF est mesuré. Sous 20 Mo il part tel quel ;
+    au-dessus, le rapport est régénéré sans images, le texte seul pesant environ 200 Ko.
+  </div>
+  <div class="note-branche">
+    <b>Deux modèles locaux</b> — <i>bge-m3</i> rapproche les sujets, <i>gemma2:9b</i> juge la qualité des
+    paragraphes, <i>llama3.1:8b</i> rédige les thèmes. Tout tourne sur la machine, sans clé ni abonnement.
+    Ollama éteint, le rapport se produit quand même par des règles déterministes.
+  </div>
 </section>` : ''}
 
 </body></html>`;

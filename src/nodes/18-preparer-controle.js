@@ -16,6 +16,23 @@ for (const a of articles) {
   // Un résumé qui recopie le titre n'apporte rien.
   if (a.resume && normal(a.resume) === normal(a.titre)) { a.resume = ''; a.resumeHtml = ''; rapport.resumesRecopies++; }
 
+  // Filet de sécurité : si un résumé reste coupé en plein mot malgré le choix
+  // de la meilleure balise, on le ramène à sa dernière phrase complète plutôt
+  // que de laisser « …sur Aryna Sabalenk » à l'impression.
+  if (a.resume && !finiCorrectement(a.resume)) {
+    const phrases = a.resume.match(/[^.!?…»]+[.!?…»]+/g);
+    const recolle = phrases ? phrases.join('').trim() : '';
+    if (recolle.length >= 60) {
+      const retire = a.resume.slice(recolle.length).trim();
+      a.resume = recolle;
+      if (a.resumeHtml && retire) {
+        const i = a.resumeHtml.replace(/<[^>]+>/g, '').indexOf(retire);
+        if (i > 0) a.resumeHtml = a.resumeHtml.slice(0, a.resumeHtml.length - retire.length).trim();
+      }
+      rapport.resumesTronques = (rapport.resumesTronques || 0) + 1;
+    }
+  }
+
   const d = a.developpement;
   if (!d?.paragraphesHtml?.length) continue;
   const gardes = [];

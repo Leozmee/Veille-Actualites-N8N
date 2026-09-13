@@ -8,6 +8,23 @@ const cibles = $('Préparer enrichissement').all().map((i) => i.json);
 const pages = $input.all();
 const cfg = articles[0].cfg;
 
+// Le Parisien tronque og:description et twitter:description à 144 caractères
+// (« …sur Aryna Sabalenk ») mais publie le texte entier dans description.
+// Prendre la première balise trouvée revenait donc à choisir la version
+// amputée : on retient désormais la meilleure, pas la première.
+const meilleureDescription = (html, cles) => {
+  const candidats = [];
+  for (const cle of cles) {
+    const v = meta(html, [cle]);
+    if (v) candidats.push(v);
+  }
+  if (!candidats.length) return '';
+  const complet = (t) => /[.!?…»"']\s*$/.test(String(t).trim());
+  const entiers = candidats.filter(complet);
+  const pool = entiers.length ? entiers : candidats;
+  return pool.reduce((a, b) => (b.length > a.length ? b : a));
+};
+
 const meta = (html, cles) => {
   for (const cle of cles) {
     const re = new RegExp(
@@ -56,7 +73,7 @@ pages.forEach((p, i) => {
   const html = typeof p.json.data === 'string' ? p.json.data : (p.json.body || '');
   if (!html || html.length < 200) return;
   parLien.set(cible.lien, {
-    resume: decode(meta(html, ['og:description', 'description', 'twitter:description'])),
+    resume: decode(meilleureDescription(html, ['description', 'og:description', 'twitter:description'])),
     image: imageLegere(html, meta(html, ['og:image', 'twitter:image'])),
     datePubliee: meta(html, ['article:published_time', 'datePublished', 'article:modified_time']),
   });
