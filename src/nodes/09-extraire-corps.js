@@ -21,8 +21,13 @@ const REBUT = /^(?:s['’]abonner|abonnez|newsletter|partager|publicit|cet artic
 // Messages d'interface glissés au milieu du texte : lecteur vidéo bloqué,
 // navigateur non pris en charge, invitation à accepter les traceurs…
 const TECHNIQUE = /(?:extension de votre navigateur|lecteur (?:vid[ée]o|audio)|bloque[rz]? le chargement|regarder ce contenu|d[ée]sactiver ou la d[ée]sinstaller|votre navigateur (?:n[e’']|ne )|n[e’']est pas (?:pris en charge|compatible)|veuillez (?:accepter|activer|autoriser)|activer le javascript|acceptez les cookies|pour lire cette vid[ée]o|contenu (?:non )?disponible)/i;
+
+// Renvois au format d'origine (vidéo, radio, émission) : ces phrases n'ont
+// aucun sens dans un PDF et parasitent la lecture.
+const RENVOI_MEDIA = /(?:ce texte correspond|retranscription (?:du|de la|d[e’'])|cliquez sur (?:la|le|l[e’'])|(?:la|cette) vid[ée]o ci-(?:dessus|dessous)|reportage ci-(?:dessus|dessous)|[ée]mission ci-(?:dessus|dessous)|(?:voir|revoir|regarder|[ée]couter) (?:la|le|l[e’'|’]|ci-)|extrait (?:de l[e’']|du) (?:[ée]mission|journal|reportage)|retrouvez (?:l[e’']int[ée]gralit[ée]|cette [ée]mission|le replay)|(?:disponible|à (?:revoir|r[ée][ée]couter)) (?:en replay|sur le site|dans l[e’']application)|abonnez-vous (?:à|au) (?:la newsletter|podcast)|article (?:r[ée]serv[ée]|initialement publi[ée])|mis à jour le \d)/i;
 const estRebut = (t) => REBUT.test(t)
   || TECHNIQUE.test(t)
+  || RENVOI_MEDIA.test(t)
   || (/\b(abonn|newsletter|cookies?|connect[ée]|inscription|javascript)\b/i.test(t) && t.length < 260);
 
 const viaJsonLd = (html) => {

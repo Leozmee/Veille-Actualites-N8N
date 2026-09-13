@@ -19,6 +19,7 @@ try {
   const v = $('Vérifier la taille du PDF').first();
   diagnostic = {
     origine: v.json.origine,
+    qualite: (() => { try { return $('Appliquer le contrôle qualité').first().json.controleQualite; } catch (e) { return null; } })(),
     tailleMo: v.json.tailleMo,
     tropLourd: v.json.tropLourd,
     binairesRecus: Object.fromEntries(Object.entries(v.binary || {}).map(([k, b]) => [k, b.fileSize])),

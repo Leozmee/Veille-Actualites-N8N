@@ -204,6 +204,45 @@ const reduireImage = (url) => {
   } catch (e) { return String(url); }
 };
 
+// Coupe au dernier mot entier : « …la tension monte à l'appr... » devenait
+// illisible, la troncature brutale cassant le mot en cours.
+const couper = (t, max) => {
+  let p = String(t || '').trim().replace(/\s+/g, ' ');
+  // Un guillemet ouvrant retiré laissait son fermant orphelin au milieu du texte.
+  if (/^[«"“]/.test(p)) p = p.replace(/^[«"“]\s*/, '').replace(/\s*[»"”]\s*(?=[:,;]|$)/, ' ');
+  p = p.replace(/\s+/g, ' ').trim();
+  if (p.length <= max) return p;
+  const bout = p.slice(0, max);
+  const esp = bout.lastIndexOf(' ');
+  return (esp > max * 0.5 ? bout.slice(0, esp) : bout).replace(/[,;:–—-]$/, '') + '…';
+};
+
+// Étiquette courte d'un sujet : ce qui précède les deux-points fait
+// généralement office de thème dans la titraille de presse.
+const etiquette = (titre) => {
+  let t = String(titre || '').replace(/^(?:EN DIRECT|EN IMAGES|DIRECT|INFO [A-ZÀ-Ý ]+)[,:\s-]+/i, '').trim();
+
+  // Un titre ouvrant sur une citation ne dit pas son thème avant les
+  // deux-points : « Nous devons réduire la vitesse » : le patron d'Anthropic…
+  // Dans ce cas le sujet se trouve APRÈS la citation, pas dedans.
+  const citation = t.match(/^[«"“][^»"”]{3,}[»"”]\s*[:,]\s*(.+)$/);
+  if (citation) t = citation[1].trim();
+  t = t.replace(/^[«"“”\s]+/, '');
+
+  const deuxPoints = t.match(/^([^:«»]{4,40})\s*:/);
+  if (deuxPoints) return deuxPoints[1].trim().toUpperCase();
+  return couper(t, 30).replace(/…$/, '').toUpperCase();
+};
+
+// Ce qu'on retient du sujet : le chiffre marquant s'il existe, sinon la
+// suite du titre.
+const accroche = (a) => {
+  const c = (a.chiffres || []).find((x) => x.type !== 'periode');
+  if (c) return c.texte;
+  const apres = String(a.titre).split(/\s*:\s*/).slice(1).join(' : ');
+  return couper(apres || a.titre, 46);
+};
+
 // ── Fragments HTML ─────────────────────────────────────────────────────────
 const puces = (a) => (a.chiffres || []).slice(0, 4)
   .map((c) => `<span class="puce puce--${c.type}">${esc(c.texte)}</span>`).join('');
@@ -244,16 +283,16 @@ const carteFort = (a) => `
   <article class="fort">
     ${a.image ? `<div class="fort-img"><img src="${esc(reduireImage(a.image))}" alt=""></div>` : ''}
     <div class="fort-meta">
+      <span class="repere">Temps fort</span>
       <span class="badge" style="background:${a.couleur}">${esc(a.source)}</span>
       ${esc(a.categorie || '')}${a.categorie ? ' · ' : ''}${jourCourt(new Date(a.date))} ${heure(new Date(a.date))}
       ${a.angles?.length ? ` · repris par ${a.angles.length} autre${a.angles.length > 1 ? 's' : ''} titre${a.angles.length > 1 ? 's' : ''}` : ''}
     </div>
-    <h3 class="fort-titre">${a.titreHtml}</h3>
+    <h3 class="fort-titre"><a href="${esc(a.lien)}">${a.titreHtml}</a></h3>
     ${a.resumeHtml ? `<p class="fort-resume">${a.resumeHtml}</p>` : ''}
     ${a.chiffres && a.chiffres.length ? `<div class="puces">${puces(a)}</div>` : ''}
     ${blocDeveloppement(a)}
     ${blocAngles(a)}
-    <a class="lien" href="${esc(a.lien)}">${esc(a.lien.replace(/^https?:\/\/(www\.)?/, '').slice(0, 92))}…</a>
   </article>`;
 
 const carteEssentiel = (a) => `
@@ -261,15 +300,15 @@ const carteEssentiel = (a) => `
     ${a.image ? `<div class="carte-img"><img src="${esc(reduireImage(a.image))}" alt=""></div>` : ''}
     <div class="carte-txt">
       <div class="carte-meta">
+        <span class="repere">L’essentiel</span>
         <span class="badge" style="background:${a.couleur}">${esc(a.source)}</span>
         ${esc(a.categorie || '')}${a.categorie ? ' · ' : ''}${jourCourt(new Date(a.date))} ${heure(new Date(a.date))}
       </div>
-      <h3 class="carte-titre">${a.titreHtml}</h3>
+      <h3 class="carte-titre"><a href="${esc(a.lien)}">${a.titreHtml}</a></h3>
       ${a.resumeHtml ? `<p class="carte-resume">${a.resumeHtml}</p>` : ''}
       ${a.chiffres && a.chiffres.length ? `<div class="puces">${puces(a)}</div>` : ''}
       ${blocDeveloppement(a)}
       ${blocAngles(a)}
-      <a class="lien" href="${esc(a.lien)}">${esc(a.lien.replace(/^https?:\/\/(www\.)?/, '').slice(0, 92))}…</a>
     </div>
   </article>`;
 
@@ -278,11 +317,10 @@ const carteUne = (a) => `
     ${a.image ? `<div class="carte-img"><img src="${esc(reduireImage(a.image))}" alt=""></div>` : ''}
     <div class="carte-txt">
       <div class="carte-meta">${[esc(a.categorie || a.fluxLibelle || ''), `${jourCourt(new Date(a.date))} ${heure(new Date(a.date))}`].filter(Boolean).join(' · ')}</div>
-      <h3 class="carte-titre">${a.titreHtml}</h3>
+      <h3 class="carte-titre"><a href="${esc(a.lien)}">${a.titreHtml}</a></h3>
       ${a.resumeHtml ? `<p class="carte-resume">${a.resumeHtml}</p>` : ''}
       ${a.chiffres && a.chiffres.length ? `<div class="puces">${puces(a)}</div>` : ''}
       ${blocDeveloppement(a)}
-      <a class="lien" href="${esc(a.lien)}">${esc(a.lien.replace(/^https?:\/\/(www\.)?/, '').slice(0, 92))}…</a>
     </div>
   </article>`;
 
@@ -349,6 +387,15 @@ a{color:inherit;text-decoration:none}
 .bloc-chiffre .j{font-family:"Helvetica Neue",Arial,sans-serif;font-size:7.2pt;text-transform:uppercase;
                  letter-spacing:.08em;color:#7a8090;margin-top:2mm}
 
+.accroches{list-style:none;padding:0;margin:0 0 8mm;counter-reset:none}
+.accroches li{display:flex;gap:4mm;align-items:baseline;padding:2.5mm 0;border-bottom:1px solid #eef0f4}
+.accroches li:last-child{border-bottom:0}
+.acc-num{font-family:"Helvetica Neue",Arial,sans-serif;font-size:12pt;font-weight:800;color:#c2c7d0;
+         flex:0 0 9mm;line-height:1}
+.acc-corps{flex:1;min-width:0}
+.acc-theme{display:block;font-family:"Helvetica Neue",Arial,sans-serif;font-size:8.4pt;font-weight:800;
+           letter-spacing:.08em;text-transform:uppercase;color:#16181d;margin-bottom:.8mm}
+.acc-detail{display:block;font-family:Georgia,serif;font-size:10pt;color:#3d434f;line-height:1.35}
 .sujet{border-left:3px solid #16181d;padding:2mm 0 2mm 4mm;margin-bottom:4.5mm;break-inside:avoid}
 .sujet h4{font-family:Georgia,serif;font-weight:400;font-size:11pt;margin:0 0 2mm;line-height:1.3}
 .sujet .titres{font-family:"Helvetica Neue",Arial,sans-serif;font-size:8pt;color:#5c6270}
@@ -388,6 +435,9 @@ a{color:inherit;text-decoration:none}
 .angle-resume{font-size:8.4pt;line-height:1.45;color:#4a505c}
 .aussi{font-family:"Helvetica Neue",Arial,sans-serif;font-size:7.6pt;color:#6b7280;margin:2mm 0 1mm}
 .aussi .tag{margin-left:3px}
+.repere{display:inline-block;border:1px solid #c2c7d0;color:#6b7280;font-size:6.6pt;font-weight:700;
+        letter-spacing:.1em;text-transform:uppercase;padding:1px 5px;border-radius:2px;margin-right:5px}
+.carte-titre a,.fort-titre a{color:inherit;text-decoration:none}
 .badge{display:inline-block;color:#fff;font-size:7pt;font-weight:700;letter-spacing:.05em;
        padding:1.5px 6px;border-radius:2px;margin-right:5px;text-transform:uppercase}
 .carte--essentiel{border-bottom:1px solid #d9dce2;padding-bottom:6mm;margin-bottom:6mm}
@@ -443,18 +493,23 @@ a{color:inherit;text-decoration:none}
       ${chiffresCles.map((c) => `
         <div class="bloc-chiffre t-${c.type}">
           <div class="v">${esc(c.texte)}</div>
-          <div class="c">${esc(c.article.titre.slice(0, 105))}${c.article.titre.length > 105 ? '…' : ''}</div>
+          <div class="c">${esc(couper(c.article.titre, 104))}</div>
           <div class="j">${esc(c.article.source)}</div>
         </div>`).join('')}
     </div>` : ''}
 
-    ${sujets.length ? `
-    <h3 class="section-titre">Sujets traités par plusieurs titres</h3>
-    ${sujets.slice(0, 6).map((g) => `
-      <div class="sujet">
-        <h4>${g[0].titreHtml}</h4>
-        <div class="titres">${g.map((a) => `<span class="tag" style="background:${a.couleur}">${esc(a.source)}</span>`).join('')}</div>
-      </div>`).join('')}` : ''}
+    ${tempsForts.length ? `
+    <h3 class="section-titre">Les ${tempsForts.length} temps forts du jour</h3>
+    <ol class="accroches">
+      ${tempsForts.map((a, i) => `
+        <li>
+          <span class="acc-num">${String(i + 1).padStart(2, '0')}</span>
+          <span class="acc-corps">
+            <span class="acc-theme">${esc(a.etiquetteIA || etiquette(a.titre))}</span>
+            <span class="acc-detail">${esc(accroche(a))}</span>
+          </span>
+        </li>`).join('')}
+    </ol>` : ''}
 
     <div class="sommaire">
       <div><b>Les temps forts</b>${tempsForts.length} sujet${tempsForts.length > 1 ? 's' : ''} majeur${tempsForts.length > 1 ? 's' : ''}, développés à partir de sources libres et confrontés entre titres</div>
@@ -495,8 +550,8 @@ ${journaux.map((j) => `
     <h2 style="color:${j.couleur}">${esc(j.source)}</h2>
     <span class="n">${j.total} article${j.total > 1 ? 's' : ''}${j.dansEssentiel ? ` · ${j.dansEssentiel} dans L’essentiel` : ''}</span>
   </div>
-  ${j.une.length ? `<div class="sous-titre">À la une</div>${j.une.map(carteUne).join('')}` : ''}
-  ${j.breves.length ? `<div class="sous-titre">En bref — ${j.breves.length} autres sujets</div><ul class="breves">${j.breves.map(ligneBreve).join('')}</ul>` : ''}
+  ${j.une.length ? `<div class="sous-titre">Les articles mis en avant</div>${j.une.map(carteUne).join('')}` : ''}
+  ${j.breves.length ? `<div class="sous-titre">Tous les autres articles du journal — ${j.breves.length} sujets</div><ul class="breves">${j.breves.map(ligneBreve).join('')}</ul>` : ''}
 </section>`).join('')}
 
 </body></html>`;

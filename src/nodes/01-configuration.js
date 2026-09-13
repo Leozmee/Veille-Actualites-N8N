@@ -62,6 +62,17 @@ const config = {
   // Détection des sujets couverts par plusieurs journaux (indice de Jaccard sur les titres)
   seuilSujetCommun: 0.40,
 
+  // Contrôle qualité final. Deux passes : une déterministe (coupures, doublons,
+  // longueurs) et une sémantique confiée à un modèle local, qui juge ce qu'une
+  // expression régulière ne sait pas voir — parasite, incohérence, hors-sujet.
+  controleQualite: {
+    actif: true,
+    modele: 'gemma2:9b',      // mesuré : 5/6 en 7,8 s, meilleur compromis local
+    ollama: 'http://host.docker.internal:11434',
+    tailleLot: 10,            // paragraphes jugés par appel
+    maxLots: 8,
+  },
+
   // Taille maximale du PDF joint. Au-delà, le rapport est régénéré sans images
   // (Gmail refuse au-delà de 25 Mo ; on garde de la marge pour l'encodage MIME).
   maxPdfMo: 20,
