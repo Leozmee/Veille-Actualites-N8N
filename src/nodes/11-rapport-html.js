@@ -69,7 +69,10 @@ const chiffresCles = articles
   .sort((x, y) => y.score - x.score)
   .filter((c) => {
     const k = c.texte.toLowerCase().replace(/\s+/g, ' ');
-    if (vus.has(k) || c.type === 'periode') return false;
+    // Un chiffre sans unité ne dit rien en couverture : « 12 millions » de
+    // quoi ? L'unité est calculée par le nœud d'extraction, seul à voir le
+    // texte source — la décider ici en parallèle serait la faire diverger.
+    if (vus.has(k) || c.type === 'periode' || !c.unite) return false;
     vus.add(k); return true;
   })
   .slice(0, cfg.maxChiffresMarquants);

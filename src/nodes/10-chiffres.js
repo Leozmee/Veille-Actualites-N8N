@@ -28,6 +28,10 @@ const MOTIFS = [
   `(?:${DEVISE})${ESP}*(?:${NUM})`,                                                             // $450
   `${SIGNE}(?:${NUM})${ESP}*(?:${MONNAIE_MOT})`,                                                // 3 000 euros
   `${SIGNE}(?:${NUM})${ESP}*(?:%|pour${ESP}?cent|points?${ESP}+de${ESP}+(?:pourcentage|base))`, // +11 %
+  // « 30 milliards d'économies » : sans ce motif, seul « 30 milliards » était
+  // capturé, et la carte de couverture affichait un ordre de grandeur sans
+  // dire de quoi. Placé APRÈS le motif monétaire, qui reste prioritaire.
+  `${SIGNE}(?:${NUM})${ESP}*(?:${ECHELLE})${ESP}*d(?:e|['’])${ESP}*\\p{L}[\\p{L}\\-]{2,}`,       // 30 milliards d'économies
   `${SIGNE}(?:${NUM})${ESP}*(?:${ECHELLE})`,                                                    // 2,5 millions
   `(?:${NUM})${ESP}*(?:${UNITES})`,                                                             // 12 000 logements
   `\\d{1,3}(?:${ESP}\\d{3})+`,                                                                  // 45 000
@@ -61,6 +65,27 @@ const classer = (t) => {
 // Une année isolée (2026) n'est pas une donnée chiffrée : on ne la surligne pas.
 const estAnneeSeule = (t) => /^\s*\d{4}\s*$/.test(t) && +t.trim() >= 1900 && +t.trim() <= 2099;
 
+// ── Unité portée par le chiffre ────────────────────────────────────────────
+// Uniquement ce que le texte source dit lui-même. Un « 30 milliards » que
+// l'article laisse sans unité le reste ici : déduire « euros » d'un contexte
+// budgétaire français donnerait juste le jour où l'article parlait de dollars
+// ou de mètres cubes, et une revue de presse qui invente une unité est pire
+// qu'une revue de presse qui n'en affiche pas. Les chiffres nus sont donc
+// écartés de la couverture (ils restent surlignés dans le corps des articles).
+const uniteDe = (t) => {
+  const s = String(t);
+  const dev = s.match(new RegExp(DEVISE));
+  if (dev) return dev[0];
+  const mon = s.match(new RegExp(MONNAIE_MOT, 'i'));
+  if (mon) return mon[0].trim();
+  if (/%|pour\s?cent|points?\s+de\s+(?:pourcentage|base)/i.test(s)) return '%';
+  const u = s.match(new RegExp(`(?:${UNITES})\\s*$`, 'i'));
+  if (u) return u[0].trim();
+  const comp = s.match(new RegExp(`d(?:e|['’])${ESP}*(\\p{L}[\\p{L}\\-]{2,})\\s*$`, 'iu'));
+  if (comp) return comp[1];
+  return null;
+};
+
 const POIDS = { montant: 50, pourcentage: 42, volume: 30, periode: 8 };
 
 function surligner(texte) {
@@ -77,7 +102,7 @@ function surligner(texte) {
     if (type === 'volume' && valeur !== null && Math.abs(valeur) < 10 && !/[a-zà-ÿ]/i.test(brut)) return brut;
     const affiche = brut.trim();
     const score = POIDS[type] + (valeur ? Math.max(0, Math.log10(Math.abs(valeur) + 1)) * 5 : 0);
-    trouves.push({ texte: affiche, type, valeur, score: Math.round(score * 10) / 10 });
+    trouves.push({ texte: affiche, type, valeur, unite: uniteDe(affiche), score: Math.round(score * 10) / 10 });
     return `<mark class="chiffre chiffre--${type}">${brut}</mark>`;
   });
   return { html, chiffres: trouves };

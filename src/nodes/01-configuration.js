@@ -88,7 +88,7 @@ const config = {
   maxTempsForts: 5,          // sujets majeurs, en grand format
   maxEssentiel: 22,          // total des sujets mis en tête (temps forts inclus)
   maxEssentielSansDev: 7,    // parmi eux, combien au maximum sans développement
-  maxChiffresMarquants: 12,
+  maxChiffresMarquants: 6,     // 2 rangées pleines de la grille à 3 colonnes
 };
 
 // Fenêtre réelle : depuis le dernier rapport, bornée pour éviter un pavé
