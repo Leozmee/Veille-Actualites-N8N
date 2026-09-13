@@ -30,7 +30,28 @@ reponses.forEach((rep, i) => {
       JSON.parse(m[0]).forEach((v) => {
         const lien = prep.liens?.[v.i];
         const theme = String(v.theme || '').trim().replace(/[.«»"']/g, '');
-        if (lien && theme && theme.length <= 40) etiquettes.set(lien, theme.toUpperCase());
+        if (!lien || !theme || theme.length > 40) return;
+        // Garde-fou : le modèle invente parfois des mots (« SOVEREIGNETE »,
+        // « SUEDIQUE »). Une étiquette mal orthographiée est pire qu'une
+        // étiquette médiocre : on exige que chaque mot vienne du titre.
+        const titre = prep.titres?.[v.i] || '';
+        const norm = (t) => String(t).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+        const dansTitre = norm(titre);
+        const inventes = norm(theme).split(/[^a-z0-9]+/)
+          .filter((mot) => mot.length >= 4 && !dansTitre.includes(mot.slice(0, Math.max(4, mot.length - 2))));
+        if (inventes.length) { rapport.etiquettesRejetees = (rapport.etiquettesRejetees || 0) + 1; return; }
+
+        // Aucun de ces modèles ne restitue les accents : « DERAILLEMENT »,
+        // « SUEDE ». Puisque chaque mot vient du titre, on y reprend son
+        // orthographe exacte — le modèle choisit, la source corrige.
+        const motsTitre = String(titre).match(/[\wÀ-ÿ'’-]+/g) || [];
+        const accentue = theme.split(/(\s+)/).map((mot) => {
+          if (/^\s+$/.test(mot) || mot.length < 3) return mot;
+          const cible = norm(mot);
+          const trouve = motsTitre.find((w) => norm(w) === cible);
+          return trouve ? trouve.toUpperCase() : mot;
+        }).join('');
+        etiquettes.set(lien, accentue.toUpperCase());
       });
       rapport.etiquettesGenerees = etiquettes.size;
     } catch (e) { /* réponse illisible : étiquette heuristique conservée */ }

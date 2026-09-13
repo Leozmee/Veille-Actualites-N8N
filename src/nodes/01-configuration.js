@@ -67,7 +67,11 @@ const config = {
   // expression régulière ne sait pas voir — parasite, incohérence, hors-sujet.
   controleQualite: {
     actif: true,
-    modele: 'gemma2:9b',      // mesuré : 5/6 en 7,8 s, meilleur compromis local
+    // Deux modèles, chacun sur ce qu'il fait le mieux — mesuré, pas supposé.
+    // gemma2 juge le mieux (5/6) mais rédige mal : il produisait
+    // « BUDGET TRANSMISSIONS » là où llama3.1 donne « BUDGET 2027 ».
+    modele: 'gemma2:9b',            // jugement qualité : 5/6 en 7,8 s
+    modeleEtiquettes: 'llama3.1:8b', // rédaction des thèmes : nettement plus juste
     ollama: 'http://host.docker.internal:11434',
     tailleLot: 10,            // paragraphes jugés par appel
     maxLots: 8,

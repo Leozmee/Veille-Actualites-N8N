@@ -224,14 +224,60 @@ const etiquette = (titre) => {
 
   // Un titre ouvrant sur une citation ne dit pas son thème avant les
   // deux-points : « Nous devons réduire la vitesse » : le patron d'Anthropic…
-  // Dans ce cas le sujet se trouve APRÈS la citation, pas dedans.
   const citation = t.match(/^[«"“][^»"”]{3,}[»"”]\s*[:,]\s*(.+)$/);
   if (citation) t = citation[1].trim();
   t = t.replace(/^[«"“”\s]+/, '');
 
-  const deuxPoints = t.match(/^([^:«»]{4,40})\s*:/);
-  if (deuxPoints) return deuxPoints[1].trim().toUpperCase();
-  return couper(t, 30).replace(/…$/, '').toUpperCase();
+  const avantDeuxPoints = (t.match(/^([^:«»]{4,40})\s*:/) || [])[1];
+
+  // Les noms propres et les millésimes désignent le sujet mieux qu'un début
+  // de phrase : « Pour sa quatrième campagne, Marine Le Pen se repose… »
+  // donne MARINE LE PEN, là où la découpe mécanique donnait POUR SA QUATRIÈME.
+  const COURANTS = new Set(['Le','La','Les','Un','Une','Des','Du','De','Ce','Il','Elle','En','Au','Aux','Pour','Dans','Sur','Avec','Après','Avant','Comment','Pourquoi','Que','Qui','Mais','Et','Ou','Plus','Tout','Tous','Selon','Face','Entre','Chez','Sans','Vers','Depuis','Quand','Son','Sa','Ses','Leur','Nos','Notre','Cette']);
+  const propres = [];
+  // Le mot enchaîné peut être court (« Marine Le Pen ») : une seule lettre suffit.
+  for (const m of t.matchAll(/[A-ZÀ-Ý][\wÀ-ÿ'’-]{2,}(?:\s+[A-ZÀ-Ý][\wÀ-ÿ'’-]+)*|\b(?:19|20)\d{2}\b/g)) {
+    // Les mots courants ne sont retirés qu'en TÊTE de bloc : « Marine Le Pen »
+    // deviendrait sinon « Marine Pen ».
+    const mots = m[0].split(/\s+/);
+    while (mots.length && COURANTS.has(mots[0])) mots.shift();
+    while (mots.length && COURANTS.has(mots[mots.length - 1])) mots.pop();
+    const bloc = mots.join(' ');
+    // Le premier mot d'un titre est capitalisé par convention, pas parce qu'il
+    // s'agit d'un nom propre : « Réaffirmer la souveraineté… » donnait
+    // RÉAFFIRMER. On écarte un mot isolé en tête qui a une forme verbale.
+    const enTete = m.index === 0;
+    const verbal = /(?:er|ir|re|ant|ait|ent|ez|ons)$/i.test(bloc) && !/\s/.test(bloc);
+    if (bloc.length >= 3 && !(enTete && verbal)) propres.push(bloc);
+  }
+
+  const aDuFond = (x) => x && /[A-ZÀ-Ý0-9]/.test(x.slice(1)) === false
+    ? propres.some((n) => x.includes(n)) : true;
+
+  // On garde la découpe avant deux-points si elle porte un nom propre ou un
+  // nombre ; sinon on préfère les noms propres du titre.
+  if (avantDeuxPoints && /[A-ZÀ-Ý][\wÀ-ÿ]|\d/.test(avantDeuxPoints.slice(1))) {
+    return couper(avantDeuxPoints.trim(), 26).replace(/…$/, '').toUpperCase();
+  }
+  if (propres.length) {
+    // On n'assemble que des noms ENTIERS : couper à 26 caractères donnait
+    // « MARK CARNEY EMMANUEL », le second nom tranché en plein milieu.
+    const retenus = [];
+    for (const n of propres) {
+      const essai = [...retenus, n].join(' ');
+      if (essai.length > 26) break;
+      retenus.push(n);
+    }
+    // Un sigle isolé ne fait pas un thème : « TER » seul n'apprend rien.
+    // Sous six caractères, la découpe avant deux-points est plus parlante.
+    const assemble = retenus.join(' ');
+    if (assemble.length >= 6) return assemble.toUpperCase();
+    if (avantDeuxPoints) return couper(avantDeuxPoints.trim(), 26).replace(/…$/, '').toUpperCase();
+    if (assemble) return assemble.toUpperCase();
+    return couper(propres[0], 26).replace(/…$/, '').toUpperCase();
+  }
+  if (avantDeuxPoints) return couper(avantDeuxPoints.trim(), 24).replace(/…$/, '').toUpperCase();
+  return couper(t, 24).replace(/…$/, '').replace(/\s+\S{1,3}$/, '').toUpperCase();
 };
 
 // Ce qu'on retient du sujet : le chiffre marquant s'il existe, sinon la
@@ -295,9 +341,13 @@ const carteFort = (a) => `
     ${blocAngles(a)}
   </article>`;
 
+// « L'essentiel » est présenté en texte seul. Une photo n'était disponible que
+// pour une partie des articles, et cette irrégularité cassait l'unité de la
+// section tout en la faisant ressembler aux cartes par journal, qui ont elles
+// une vignette. Trois formes distinctes valent mieux qu'un continuum flou :
+// grande image pour les temps forts, texte seul ici, vignette par journal.
 const carteEssentiel = (a) => `
-  <article class="carte carte--essentiel">
-    ${a.image ? `<div class="carte-img"><img src="${esc(reduireImage(a.image))}" alt=""></div>` : ''}
+  <article class="carte carte--essentiel carte--texte">
     <div class="carte-txt">
       <div class="carte-meta">
         <span class="repere">L’essentiel</span>
@@ -418,12 +468,15 @@ a{color:inherit;text-decoration:none}
            letter-spacing:.07em;color:#8a90a0;margin-bottom:2.5mm}
 .fort-titre{font-family:Georgia,"DejaVu Serif",serif;font-size:17pt;font-weight:700;line-height:1.2;margin:0 0 3mm}
 .fort-resume{margin:0 0 2mm;font-size:11pt;line-height:1.55;color:#2b303a}
-.sommaire{display:flex;gap:0;border-top:1px solid #dfe2e8;margin-top:6mm;padding-top:4mm;
-          font-family:"Helvetica Neue",Arial,sans-serif;font-size:8pt;color:#5c6270}
-.sommaire div{flex:1;border-right:1px solid #e7e9ee;padding:0 3mm}
+.sommaire{display:flex;gap:0;margin:0 0 7mm;
+          font-family:"Helvetica Neue",Arial,sans-serif;font-size:9pt;line-height:1.45;color:#4a505c}
+.sommaire div{flex:1;border-right:1px solid #dfe2e8;padding:0 5mm}
 .sommaire div:first-child{padding-left:0}
-.sommaire div:last-child{border-right:0}
-.sommaire b{display:block;color:#16181d;font-size:9pt;margin-bottom:1mm}
+.sommaire div:last-child{border-right:0;padding-right:0}
+.som-num{display:inline-block;width:6mm;height:6mm;line-height:6mm;text-align:center;border-radius:50%;
+         background:#16181d;color:#fff;font-size:8pt;font-weight:800;margin-bottom:2.5mm}
+.sommaire b{display:block;color:#16181d;font-family:Georgia,"DejaVu Serif",serif;font-size:13pt;
+            font-weight:700;margin-bottom:1.5mm;letter-spacing:-.01em}
 .angles{margin:3mm 0 1mm;padding:3mm 0 0;border-top:1px solid #dfe2e8;break-inside:avoid}
 .angles-titre{font-family:"Helvetica Neue",Arial,sans-serif;font-size:7pt;text-transform:uppercase;
               letter-spacing:.12em;color:#8a90a0;font-weight:700;margin-bottom:2.5mm}
@@ -441,6 +494,9 @@ a{color:inherit;text-decoration:none}
 .badge{display:inline-block;color:#fff;font-size:7pt;font-weight:700;letter-spacing:.05em;
        padding:1.5px 6px;border-radius:2px;margin-right:5px;text-transform:uppercase}
 .carte--essentiel{border-bottom:1px solid #d9dce2;padding-bottom:6mm;margin-bottom:6mm}
+.carte--texte{display:block}
+.carte--texte .carte-titre{font-size:13pt}
+.carte--texte .carte-resume{font-size:10pt}
 .essentiel{padding:0 10mm;break-after:page}
 .essentiel-entete{border-bottom:2.5px solid #16181d;padding-bottom:3mm;margin-bottom:6mm;
                   display:flex;align-items:baseline;gap:4mm}
@@ -479,7 +535,7 @@ a{color:inherit;text-decoration:none}
     <div class="surtitre">Veille presse quotidienne · 5 titres nationaux</div>
     <h1>Revue de presse</h1>
     <p class="periode">${periode}</p>
-    <div class="sous">${articles.length} articles collectés · ${journaux.length} journaux · généré le ${jourLong(new Date())} à ${heure(new Date())}</div>
+    <div class="sous">${articles.length} articles collectés · ${journaux.length} journaux · généré le ${jourLong(new Date())}</div>
   </div>
 
   <div class="zone">
@@ -511,18 +567,25 @@ a{color:inherit;text-decoration:none}
         </li>`).join('')}
     </ol>` : ''}
 
+    <h3 class="section-titre">Au sommaire</h3>
     <div class="sommaire">
-      <div><b>Les temps forts</b>${tempsForts.length} sujet${tempsForts.length > 1 ? 's' : ''} majeur${tempsForts.length > 1 ? 's' : ''}, développés à partir de sources libres et confrontés entre titres</div>
-      <div><b>L’essentiel</b>${reste.length} sujet${reste.length > 1 ? 's' : ''} suivis, dont ${reste.filter(aDev).length} développé${reste.filter(aDev).length > 1 ? 's' : ''}</div>
-      <div><b>Par journal</b>${journaux.length} sections : les articles mis en avant, puis l’ensemble des brèves</div>
+      <div>
+        <span class="som-num">1</span>
+        <b>Les temps forts</b>
+        <span>${tempsForts.length} sujet${tempsForts.length > 1 ? 's' : ''} majeur${tempsForts.length > 1 ? 's' : ''}, développés à partir de sources libres et confrontés entre titres</span>
+      </div>
+      <div>
+        <span class="som-num">2</span>
+        <b>L’essentiel</b>
+        <span>${reste.length} sujet${reste.length > 1 ? 's' : ''} suivis, dont ${reste.filter(aDev).length} développé${reste.filter(aDev).length > 1 ? 's' : ''}</span>
+      </div>
+      <div>
+        <span class="som-num">3</span>
+        <b>Par journal</b>
+        <span>${journaux.length} sections : les articles mis en avant, puis l’ensemble des brèves</span>
+      </div>
     </div>
 
-    <div class="legende">
-      <span><span class="chiffre chiffre--pourcentage">%</span> pourcentage</span>
-      <span><span class="chiffre chiffre--montant">€</span> montant</span>
-      <span><span class="chiffre chiffre--volume">123</span> volume / quantité</span>
-      <span><span class="chiffre chiffre--periode">2020-2026</span> période</span>
-    </div>
   </div>
 </section>
 

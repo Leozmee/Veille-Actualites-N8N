@@ -76,6 +76,7 @@ const pourEtiquettes = articles
 if (pourEtiquettes.length) {
   const consigneEtiq = `Pour chaque titre de presse, donne le THÈME en 2 à 4 mots, en majuscules, sans ponctuation.
 Le thème est le sujet traité, jamais un extrait de citation.
+N'emploie QUE des mots présents dans le titre, recopiés à l'identique. N'invente aucun mot.
 
 Exemples :
 « Ils sont où, les 30 milliards d'euros d'économies ? » : la tension monte avant le budget → BUDGET 2027
@@ -89,9 +90,10 @@ Réponds UNIQUEMENT par un tableau JSON, dans l'ordre :
     ignorer: false,
     tache: 'etiquettes',
     url: `${q.ollama}/api/generate`,
-    model: q.modele,
+    model: q.modeleEtiquettes || q.modele,
     prompt: `${consigneEtiq}\n\n${pourEtiquettes.map((a, k) => `[${k}] ${a.titre}`).join('\n')}`,
     liens: pourEtiquettes.map((a) => a.lien),
+    titres: pourEtiquettes.map((a) => a.titre),
   });
 }
 
