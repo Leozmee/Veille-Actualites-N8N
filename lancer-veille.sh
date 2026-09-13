@@ -12,6 +12,9 @@ export PATH="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 PROJET="${0:A:h}"
 INTERVALLE_JOURS=3
+# Rendormir le Mac après le rapport s'il dormait avant (voir § 6).
+RENDORMIR=1
+INACTIVITE_MINI=240          # secondes sans clavier ni souris pour conclure « absent »
 ETAT="$PROJET/rapports/.etat.json"
 JOURNAL="$PROJET/rapports/.journal.log"
 WORKFLOW_ID="veillePresse0001"
@@ -52,6 +55,12 @@ trace "─── démarrage ───"
 # en veille — le rapport serait alors perdu sans trace d'erreur.
 # Le garde-fou s'efface tout seul à la fin du script.
 caffeinate -dimsu -w $$ > /dev/null 2>&1 &
+
+# Inactivité relevée avant de commencer : un Mac qui sort de veille affiche
+# une inactivité élevée, un Mac en cours d'utilisation une inactivité nulle.
+# C'est ce qui permet de ne rendormir que ce qui dormait.
+INACTIVITE_DEPART=$(ioreg -c IOHIDSystem 2>/dev/null | awk '/HIDIdleTime/ {printf "%d", $NF/1000000000; exit}')
+INACTIVITE_DEPART=${INACTIVITE_DEPART:-0}
 DEMARRE_DOCKER=0
 DEMARRE_OLLAMA=0
 DOCKER_RECUPERE=0
@@ -212,4 +221,23 @@ else
 fi
 
 pkill -x ollama > /dev/null 2>&1 && trace "Ollama arrêté"
+# ── 6. Rendormir le Mac s'il dormait ──────────────────────────────────────
+# launchd ne réveille pas la machine : une tâche calendaire est différée puis
+# lancée à la sortie de veille. Avec « sudo pmset repeat wakeorpoweron », le
+# Mac se réveille de lui-même à l'heure dite — il faut alors le rendormir,
+# sinon il resterait allumé toute la journée.
+# On ne le fait que si personne ne s'en sert : l'inactivité relevée au
+# démarrage distingue un réveil programmé d'une exécution manuelle.
+if (( RENDORMIR )) && [[ "${INACTIVITE_DEPART:-0}" -ge "$INACTIVITE_MINI" ]]; then
+  INACTIVITE_FIN=$(ioreg -c IOHIDSystem 2>/dev/null | awk '/HIDIdleTime/ {printf "%d", $NF/1000000000; exit}')
+  if [[ "${INACTIVITE_FIN:-0}" -ge 60 ]]; then
+    trace "personne aux commandes — retour en veille"
+    pmset sleepnow > /dev/null 2>&1
+  else
+    trace "activité détectée pendant l'exécution — Mac laissé éveillé"
+  fi
+else
+  trace "Mac en cours d'utilisation — laissé éveillé"
+fi
+
 trace "─── terminé ───"
