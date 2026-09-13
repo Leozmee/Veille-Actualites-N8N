@@ -5,6 +5,9 @@ GET  /health
 
 Presets : printer (300 dpi, défaut), ebook (150 dpi), screen (72 dpi).
 Sur un rapport illustré de 11,5 Mo, /printer descend à ~2,2 Mo sans perte visible.
+
+Un PDF déjà léger traverse le service sans être touché : la compression est
+lossy, et un rapport de 2 Mo n'a rien à y gagner. Voir SEUIL_COMPRESSION.
 """
 import os
 import subprocess
@@ -14,6 +17,17 @@ from urllib.parse import urlparse, parse_qs
 
 PRESETS = {"printer", "ebook", "screen", "prepress", "default"}
 TAILLE_MAX = 200 * 1024 * 1024
+
+# En deçà de ce poids, le PDF est rendu intact. La limite d'envoi est à 20 Mo :
+# un rapport de 2 Mo n'a rien à gagner à être rééchantillonné, et tout à perdre.
+SEUIL_COMPRESSION = int(os.environ.get("SEUIL_COMPRESSION_MO", "6")) * 1024 * 1024
+
+# Ghostscript recopie les profils ICC de Chromium en flux VIDES : les visionneuses
+# strictes — dont CoreGraphics, donc Aperçu et Mail sur Mac — refusent alors de
+# dessiner l'image et laissent un cadre blanc. Poppler, lui, passe outre, d'où un
+# défaut longtemps invisible en test. Convertir en sRGB supprime ces profils
+# cassés ; le gain de compression est inchangé (499 Ko contre 502 Ko à l'essai).
+COULEUR = ["-dColorConversionStrategy=/sRGB"]
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -52,6 +66,10 @@ class Handler(BaseHTTPRequestHandler):
         if not source.startswith(b"%PDF"):
             return self._envoyer(400, b'{"error":"le corps n\'est pas un PDF"}')
 
+        if len(source) <= SEUIL_COMPRESSION:
+            self.log_message("intact : %d octets, sous le seuil", len(source))
+            return self._envoyer(200, source, "application/pdf")
+
         with tempfile.TemporaryDirectory() as tmp:
             entree = os.path.join(tmp, "in.pdf")
             sortie = os.path.join(tmp, "out.pdf")
@@ -62,6 +80,7 @@ class Handler(BaseHTTPRequestHandler):
                     ["gs", "-sDEVICE=pdfwrite", "-dCompatibilityLevel=1.5",
                      f"-dPDFSETTINGS=/{preset}", "-dNOPAUSE", "-dQUIET", "-dBATCH",
                      "-dDetectDuplicateImages=true", "-dCompressFonts=true",
+                     *COULEUR,
                      f"-sOutputFile={sortie}", entree],
                     check=True, timeout=300,
                     stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
