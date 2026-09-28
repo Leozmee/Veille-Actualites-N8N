@@ -283,6 +283,9 @@
       ],
       "onError": "continueRegularOutput",
       "alwaysOutputData": true,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 15000,
       "notes": "Ollama tourne nativement sur le Mac (GPU Metal). S’il est arrêté, le rapport est simplement produit sans développements."
     },
     {

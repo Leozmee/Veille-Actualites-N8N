@@ -129,6 +129,13 @@ const nodes = [
     id: 'ollama-embed', name: 'Encoder les titres (Ollama)',
     type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [1820, 100],
     onError: 'continueRegularOutput', alwaysOutputData: true,
+    // Le 28/09, Ollama a répondu « 500 timed out waiting for llama-server to
+    // start » : la requête est arrivée pendant le chargement de bge-m3, sur une
+    // machine qui sortait de veille et démarrait Docker en même temps. Sans
+    // vecteurs, pas d'appariement, donc pas un seul développement et un rapport
+    // amputé de ses temps forts. Trois tentatives espacées laissent au modèle le
+    // temps de finir de se charger.
+    retryOnFail: true, maxTries: 3, waitBetweenTries: 15000,
     notes: 'Ollama tourne nativement sur le Mac (GPU Metal). S’il est arrêté, le rapport est simplement produit sans développements.',
   },
 

@@ -76,6 +76,26 @@ if ! pgrep -x ollama > /dev/null 2>&1; then
   trace "Ollama démarré"
 fi
 
+# Répondre sur /api/tags ne veut pas dire savoir encoder : le modèle n'est pas
+# encore en mémoire. Le 28/09, la première requête d'encodage est tombée sur un
+# « timed out waiting for llama-server to start » et le rapport a perdu tous ses
+# temps forts. On force donc le chargement ici, hors de la course, sur une
+# machine qui sort de veille et démarre Docker en même temps.
+PRECHAUFFE=0
+for i in {1..30}; do
+  if curl -sf -o /dev/null --max-time 20 http://localhost:11434/api/embed \
+       -d '{"model":"bge-m3","input":["préchauffage"]}'; then
+    PRECHAUFFE=1
+    break
+  fi
+  sleep 4
+done
+if (( PRECHAUFFE )); then
+  trace "modèle d'appariement prêt"
+else
+  trace "ATTENTION : bge-m3 ne répond pas — rapport probablement sans temps forts"
+fi
+
 # ── 3. Docker ─────────────────────────────────────────────────────────────
 # Docker Desktop démarre parfois sa VM sans que le réseau interne soit joignable
 # (« no route to host » vers 192.168.65.x). Le démon ne répond alors jamais.
@@ -175,6 +195,22 @@ CODE=$?
 
 if grep -q "Execution was successful" /tmp/veille-exec.log 2>/dev/null; then
   trace "rapport envoyé"
+  # Une exécution « réussie » peut livrer un rapport amputé : les nœuds Ollama
+  # et HTTP sont en continueRegularOutput, une panne y est donc avalée sans
+  # faire échouer quoi que ce soit. C'est ce qui s'est produit le 28/09 — zéro
+  # développement, plus aucun temps fort, et rien dans le journal pour le dire.
+  DEV=$(/usr/bin/python3 -c "
+import json
+try:
+    d = json.load(open('$ETAT')).get('diagnostic') or {}
+    print((d.get('qualite') or {}).get('developpementsRestants', ''))
+except Exception: print('')
+" 2>/dev/null)
+  if [[ "$DEV" == "0" ]]; then
+    trace "ATTENTION : aucun développement — rapport sans temps forts (appariement Ollama en échec ?)"
+  elif [[ -n "$DEV" ]]; then
+    trace "${DEV} développement(s) retenus"
+  fi
 elif [[ -n "$(find "$PROJET/rapports" -name '*.pdf' -newermt '-10 minutes' 2>/dev/null)" ]]; then
   trace "PDF produit mais l'envoi a échoué (code $CODE) — vérifier les identifiants SMTP"
 else
