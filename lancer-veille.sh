@@ -227,6 +227,34 @@ fi
 #     piège : une exécution qui échoue à l'éteindre le laisse allumé, et toutes
 #     les suivantes le trouvent déjà démarré et ne l'éteignent donc jamais.
 #     On éteint donc dès lors qu'aucun conteneur étranger ne tourne.
+# ── Purge des exécutions n8n ──────────────────────────────────────────────
+# n8n conserve chaque exécution avec ses données — images en base64 comprises,
+# soit ~30 Mo par rapport. En trois semaines la base atteignait 1,9 Go. Sa
+# purge intégrée ne tourne que dans un serveur permanent, or n8n n'est lancé
+# ici qu'en ligne de commande, le temps d'une exécution : il faut donc le faire
+# soi-même. La clé étrangère est en CASCADE, supprimer l'exécution emporte ses
+# données. VACUUM n'est lancé que si quelque chose a réellement été supprimé,
+# car il réécrit toute la base.
+RETENTION_JOURS=30
+VOL=$(docker volume ls --format '{{.Name}}' | grep -x 'veille-presse-n8n_n8n_data' | head -1)
+if [[ -n "$VOL" ]]; then
+  PURGE=$(docker run --rm --mount "source=$VOL,target=/d" veille-compresseur:1 sh -c "
+    n=\$(sqlite3 /d/database.sqlite \"SELECT COUNT(*) FROM execution_entity WHERE startedAt < datetime('now','-${RETENTION_JOURS} days');\")
+    if [ \"\$n\" -gt 0 ]; then
+      sqlite3 /d/database.sqlite \"PRAGMA foreign_keys=ON; DELETE FROM execution_entity WHERE startedAt < datetime('now','-${RETENTION_JOURS} days');\"
+      sqlite3 /d/database.sqlite 'VACUUM;'
+    fi
+    echo \"\$n \$(du -m /d/database.sqlite | cut -f1)\"
+  " 2>/dev/null)
+  SUPPRIMEES=${PURGE%% *}
+  TAILLE=${PURGE##* }
+  if [[ "${SUPPRIMEES:-0}" -gt 0 ]]; then
+    trace "purge n8n : ${SUPPRIMEES} exécution(s) de plus de ${RETENTION_JOURS} j supprimées — base à ${TAILLE} Mo"
+  else
+    trace "purge n8n : rien à supprimer — base à ${TAILLE:-?} Mo"
+  fi
+fi
+
 docker compose down >> "$JOURNAL" 2>&1
 
 AUTRES=$(docker ps -q 2>/dev/null | wc -l | tr -d ' ')

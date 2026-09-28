@@ -20,6 +20,12 @@ services:
       - OLLAMA_HOST=http://host.docker.internal:11434
       # Rapports volumineux : on garde les binaires sur disque plutôt qu'en mémoire
       - N8N_DEFAULT_BINARY_DATA_MODE=filesystem
+      # Rétention des exécutions : 30 jours (720 h). Ces variables ne prennent
+      # effet que si n8n tourne en serveur ; ici il est lancé en ligne de
+      # commande le temps d'une exécution, donc la purge réelle est faite par
+      # lancer-veille.sh. On les pose pour que les deux disent la même chose.
+      - EXECUTIONS_DATA_PRUNE=true
+      - EXECUTIONS_DATA_MAX_AGE=720
       - N8N_PAYLOAD_SIZE_MAX=64
       # SMTP — à renseigner (ou via l'interface : Credentials ▸ SMTP)
       # - N8N_EMAIL_MODE=smtp
