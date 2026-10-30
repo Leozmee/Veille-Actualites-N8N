@@ -96,6 +96,28 @@ else
   trace "ATTENTION : bge-m3 ne répond pas — rapport probablement sans temps forts"
 fi
 
+# ── Réseau réellement établi ──────────────────────────────────────────────
+# Les exécutions parties à 08:00 pile durent deux minutes ; celles différées
+# par launchd parce que le Mac dormait — 08 h 07, 08 h 11, 08 h 16 — durent
+# trois quarts d'heure à deux heures et demie, et l'une d'elles a vu Gmail
+# fermer la connexion en cours d'envoi. Le point commun n'est pas la taille du
+# rapport mais le réveil : le Wi-Fi vient de se réassocier et le débit sortant
+# met un moment à revenir. On attend donc de pouvoir réellement ouvrir une
+# connexion vers le serveur SMTP, pas seulement d'avoir une interface up.
+RESEAU=0
+for i in {1..30}; do
+  if nc -z -G 5 smtp.gmail.com 465 > /dev/null 2>&1; then
+    RESEAU=1
+    break
+  fi
+  sleep 5
+done
+if (( RESEAU )); then
+  (( i > 1 )) && trace "réseau établi après $(( (i - 1) * 5 )) s d'attente"
+else
+  trace "ATTENTION : smtp.gmail.com injoignable — l'envoi risque d'échouer"
+fi
+
 # ── 3. Docker ─────────────────────────────────────────────────────────────
 # Docker Desktop démarre parfois sa VM sans que le réseau interne soit joignable
 # (« no route to host » vers 192.168.65.x). Le démon ne répond alors jamais.
@@ -190,6 +212,16 @@ fi
 
 # --no-deps : sans cela, « compose run » relance gotenberg et compresseur en
 # parallèle de ceux déjà lancés, d'où la double création de réseau observée.
+# L'état est écrit par le workflow AVANT l'envoi du mail. Un envoi qui échoue
+# laisse donc 200 articles marqués « déjà reçus » alors que personne ne les a
+# eus, et le rapport suivant les omet en silence : c'est ce qui s'est produit
+# le 28/10, connexion SMTP fermée en cours de route. On garde une copie pour
+# pouvoir revenir en arrière — « dernierRun » retrouve alors sa valeur
+# précédente, et la tentative repart d'elle-même le lendemain.
+AVANT_RUN=$(mktemp)
+cp "$ETAT" "$AVANT_RUN" 2>/dev/null || : > "$AVANT_RUN"
+DEBUT_RUN=$(date +%s)
+
 docker compose run --rm --no-deps --entrypoint n8n n8n execute --id "$WORKFLOW_ID" > /tmp/veille-exec.log 2>&1
 CODE=$?
 
@@ -211,10 +243,26 @@ except Exception: print('')
   elif [[ -n "$DEV" ]]; then
     trace "${DEV} développement(s) retenus"
   fi
-elif [[ -n "$(find "$PROJET/rapports" -name '*.pdf' -newermt '-10 minutes' 2>/dev/null)" ]]; then
-  trace "PDF produit mais l'envoi a échoué (code $CODE) — vérifier les identifiants SMTP"
+  rm -f "$AVANT_RUN"
 else
-  trace "ÉCHEC (code $CODE) — voir /tmp/veille-exec.log"
+  # Un envoi lent repoussait le PDF hors de la fenêtre fixe de dix minutes : le
+  # 28/10, le rapport était bien sur le disque depuis 09 h 28 et le journal a
+  # tout de même écrit « ÉCHEC » sans mentionner qu'il existait. On compare
+  # désormais au début de l'exécution.
+  if [[ -n "$(find "$PROJET/rapports" -name '*.pdf' -newermt "@$DEBUT_RUN" 2>/dev/null)" ]]; then
+    MOTIF="PDF produit, envoi en échec"
+  else
+    MOTIF="aucun rapport produit"
+  fi
+  CAUSE=$(grep -m1 -oE '"(message)":"[^"]{0,90}"' /tmp/veille-exec.log 2>/dev/null | cut -c13- | tr -d '"')
+  trace "ÉCHEC (code $CODE) — ${MOTIF}${CAUSE:+ : $CAUSE}"
+  # Retour à l'état d'avant : les articles de ce rapport redeviennent éligibles
+  # et l'intervalle n'est pas consommé, donc le lendemain réessaie.
+  if [[ -s "$AVANT_RUN" ]]; then
+    cp "$AVANT_RUN" "$ETAT"
+    trace "état restauré — nouvelle tentative au prochain réveil"
+  fi
+  rm -f "$AVANT_RUN"
 fi
 
 # ── 5. Retour au repos ────────────────────────────────────────────────────

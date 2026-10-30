@@ -368,6 +368,11 @@ const nodes = [
     disabled: !ENVOI_ACTIF,
     id: 'email', name: 'Envoyer le rapport',
     type: 'n8n-nodes-base.emailSend', typeVersion: 2.1, position: [6880, 100],
+    // Le 28/10, Gmail a fermé la connexion en cours d'envoi (« Connection closed
+    // unexpectedly ») après trois quarts d'heure, et le rapport n'est jamais
+    // parti. Une pièce jointe de 2 Mo sur un lien qui sort tout juste de veille
+    // ne passe pas toujours du premier coup ; deux minutes plus tard, si.
+    retryOnFail: true, maxTries: 3, waitBetweenTries: 120000,
     notes: 'Identifiant SMTP à créer dans n8n. Le PDF est joint depuis la propriété binaire « data ».',
   },
 ];

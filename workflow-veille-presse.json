@@ -921,6 +921,9 @@
         6880,
         100
       ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 120000,
       "notes": "Identifiant SMTP à créer dans n8n. Le PDF est joint depuis la propriété binaire « data »."
     }
   ],
