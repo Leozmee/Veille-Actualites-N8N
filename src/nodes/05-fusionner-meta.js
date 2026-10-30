@@ -38,12 +38,9 @@ const meta = (html, cles) => {
   }
   return '';
 };
-const decode = (s) =>
-  String(s)
-    .replace(/&amp;/gi, '&').replace(/&quot;/gi, '"').replace(/&#0?39;|&apos;/gi, '’')
-    .replace(/&lt;/gi, '<').replace(/&gt;/gi, '>').replace(/&nbsp;/gi, ' ')
-    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(+n))
-    .replace(/\s+/g, ' ').trim();
+/* __ENTITES__ */
+
+const decode = (s) => decoderEntites(s).replace(/\s+/g, ' ').trim();
 
 // Les URL de redimensionnement du Parisien sont signées : impossible d'y changer
 // la taille après coup. On cherche donc dans la page la plus petite variante déjà

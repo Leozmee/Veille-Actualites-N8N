@@ -7,7 +7,22 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ICI = path.dirname(fileURLToPath(import.meta.url));
-const src = (f) => fs.readFileSync(path.join(ICI, 'src', 'nodes', f), 'utf8');
+
+// Un nœud Code n'importe rien : son corps doit se suffire à lui-même. Le code
+// que plusieurs nœuds partagent vit donc dans src/commun/ et est recopié à la
+// construction, là où le nœud écrit le marqueur correspondant. Sans cela,
+// chaque nœud réécrit sa version — et elles divergent, comme l'ont fait les
+// trois décodages d'entités HTML.
+const commun = (f) => fs.readFileSync(path.join(ICI, 'src', 'commun', f), 'utf8');
+const MARQUEURS = { '/* __ENTITES__ */': () => commun('entites.js') };
+
+const src = (f) => {
+  let code = fs.readFileSync(path.join(ICI, 'src', 'nodes', f), 'utf8');
+  for (const [marque, charger] of Object.entries(MARQUEURS)) {
+    if (code.includes(marque)) code = code.replace(marque, charger());
+  }
+  return code;
+};
 
 // Identifiant SMTP créé dans l'interface n8n (Credentials ▸ SMTP). Référencé ici
 // pour que le rattachement survive aux réimports du workflow.

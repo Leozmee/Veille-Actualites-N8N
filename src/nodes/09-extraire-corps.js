@@ -7,14 +7,14 @@ const cibles = $('Préparer extraction du corps').all().map((i) => i.json);
 const pages = $input.all();
 const d = articles[0].cfg.developpements;
 
-const deTag = (s) => String(s)
-  .replace(/<(script|style)[\s\S]*?<\/\1>/gi, ' ')
-  .replace(/<br\s*\/?>/gi, ' ')
-  .replace(/<[^>]+>/g, ' ')
-  .replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&').replace(/&quot;/gi, '"')
-  .replace(/&#0?39;|&apos;/gi, '’').replace(/&lt;/gi, '<').replace(/&gt;/gi, '>')
-  .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(+n))
-  .replace(/\s+/g, ' ').trim();
+/* __ENTITES__ */
+
+const deTag = (s) => decoderEntites(
+  String(s)
+    .replace(/<(script|style)[\s\S]*?<\/\1>/gi, ' ')
+    .replace(/<br\s*\/?>/gi, ' ')
+    .replace(/<[^>]+>/g, ' '),
+).replace(/\s+/g, ' ').trim();
 
 // Habillage éditorial à ne pas confondre avec du texte d'article
 const REBUT = /^(?:s['’]abonner|abonnez|newsletter|partager|publicit|cet article|lire aussi|à lire|voir aussi|suivez|retrouvez tous|tous droits|© |commentaire|inscrivez|connectez|déjà abonné|profitez de|sans engagement|découvrez|recevez|en cliquant|vos préférences|cookies?\b|pour sauvegarder|pour profiter|vous devez être|votre compte|identifiez-vous|créez un compte|ce contenu est|activez javascript|veuillez activer)/i;

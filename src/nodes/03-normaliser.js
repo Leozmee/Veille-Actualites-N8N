@@ -26,17 +26,15 @@ const attr = (v, name) => {
   return '';
 };
 
+/* __ENTITES__ */
+
 // Retire les balises HTML éventuellement présentes dans les descriptions
 const deTag = (s) =>
-  String(s)
-    .replace(/<br\s*\/?>/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/&amp;/gi, '&')
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;|&apos;/gi, '’')
-    .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>')
+  decoderEntites(
+    String(s)
+      .replace(/<br\s*\/?>/gi, ' ')
+      .replace(/<[^>]+>/g, ' '),
+  )
     .replace(/\s+/g, ' ')
     .trim();
 
